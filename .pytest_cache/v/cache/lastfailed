@@ -1,0 +1,17 @@
+{
+  "backend/tests/test_step11_hockey_integration.py::TestHockeyIntegration::test_7_only_validated_hockey_predictions_reach_published_feed": true,
+  "backend/tests/test_step12_f1_integration.py::TestF1Integration::test_6_only_validated_f1_predictions_reach_published_feed": true,
+  "backend/tests/test_step14_production_audit.py::Step14ProductionAuditTestSuite::test_end_to_end_audit": true,
+  "backend/tests/test_database_feed_failover_architecture.py::TestDatabaseFeedFailoverArchitecture::test_redis_failure_falls_back_to_databaserouter_without_data_loss": true,
+  "backend/tests/test_fix6_database_persistence_authoritative.py::TestFix6DatabasePersistenceAuthoritative::test_feed_service_filters_unvalidated": true,
+  "backend/tests/test_fix6_database_persistence_authoritative.py::TestFix6DatabasePersistenceAuthoritative::test_feed_service_max_limit_20": true,
+  "backend/tests/test_fix6_database_persistence_authoritative.py::TestFix6DatabasePersistenceAuthoritative::test_feed_service_redis_down_mongo_working": true,
+  "backend/tests/test_fix6_database_persistence_authoritative.py::TestFix6DatabasePersistenceAuthoritative::test_feed_service_redis_working": true,
+  "backend/tests/test_prediction_feed_redis_miss.py::TestPredictionFeedRedisMissAndProjection::test_database_fallback_sorting_order": true,
+  "backend/tests/test_prediction_feed_redis_miss.py::TestPredictionFeedRedisMissAndProjection::test_feed_service_safety_gates_enforced": true,
+  "backend/tests/test_prediction_feed_redis_miss.py::TestPredictionFeedRedisMissAndProjection::test_redis_miss_routes_to_mongodb_and_returns_complete_representation": true,
+  "backend/tests/test_prediction_feed_redis_miss.py::TestPredictionFeedRedisMissAndProjection::test_refresh_persists_database_first_and_handles_redis_failure": true,
+  "backend/tests/test_redis_client_resilience.py::TestRedisClientResilience::test_6_production_fail_closed_behavior": true,
+  "backend/tests/test_fix1_database_routing_and_failover.py::TestFix1DatabaseRoutingAndFailover::test_5_feature_repository_uses_database_router": true,
+  "backend/tests/test_sync_scores_evaluation_pipeline.py::SyncScoresEvaluationPipelineTestSuite::test_successful_promotion_when_all_gates_pass": true
+}

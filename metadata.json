@@ -1,0 +1,7 @@
+{
+  "name": "PredictPro",
+  "description": "Next-generation sports analytics and validated prediction intelligence platform.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
