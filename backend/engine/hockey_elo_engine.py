@@ -85,25 +85,25 @@ def run_hockey_elo_engine(sport: str, home_team: str, away_team: str, cutoff_tim
     p_home_2way = 1.0 / (1.0 + math.pow(10, -r_diff / 400.0))
     p_away_2way = 1.0 - p_home_2way
 
-    exp_home_goals = 3.0 + (p_home_2way - 0.5) * 1.5
-    exp_away_goals = 3.0 - (p_home_2way - 0.5) * 1.5
-
-    raw_markets = generate_hockey_markets(
-        home_team=home_team,
-        away_team=away_team,
-        p_home_win=p_home_2way,
-        p_away_win=p_away_2way,
-        expected_home_goals=exp_home_goals,
-        expected_away_goals=exp_away_goals,
-        total_goals_benchmark=5.5,
-        puck_line_spread=1.5,
-    )
-
-    for m in raw_markets:
-        m["modelSource"] = "ELO"
+    markets: List[Dict[str, Any]] = [
+        {
+            "marketName": "Moneyline",
+            "selection": f"{home_team} Win",
+            "rawProbability": round(p_home_2way, 4),
+            "modelSource": "ELO",
+            "marketCategory": "Moneyline",
+        },
+        {
+            "marketName": "Moneyline",
+            "selection": f"{away_team} Win",
+            "rawProbability": round(p_away_2way, 4),
+            "modelSource": "ELO",
+            "marketCategory": "Moneyline",
+        },
+    ]
 
     return {
-        "markets": raw_markets,
+        "markets": markets,
         "homeRating": round(h_data["rating"]),
         "awayRating": round(a_data["rating"]),
         "hasSufficientData": True,

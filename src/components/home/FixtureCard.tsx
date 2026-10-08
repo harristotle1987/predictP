@@ -1,7 +1,7 @@
 import React from 'react';
 import { ValidatedFixture } from '../../types';
 import { formatLagosKickoff } from '../../utils/timezone';
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, TrendingUp, ShieldCheck } from 'lucide-react';
 
 interface FixtureCardProps {
   fixture: ValidatedFixture;
@@ -25,12 +25,28 @@ export const FixtureCard: React.FC<FixtureCardProps> = ({ fixture, onSelect }) =
 
   const stats = fixture.sportStats || {};
   const validatedMarketsCount = fixture.validatedMarkets?.length || 0;
-  const isCompleted = fixture.status === 'completed';
-  const isLive = fixture.status === 'live';
-  const isUpcoming = fixture.status === 'upcoming';
+
+  // Strict status determination: upcoming fixtures must never be marked live or completed
+  const kickoffMs = fixture.kickoffUtc ? new Date(fixture.kickoffUtc).getTime() : 0;
+  const nowMs = Date.now();
+  const isFutureKickoff = kickoffMs > nowMs + 5 * 60 * 1000;
+
+  const rawStatus = String(fixture.status || '').toLowerCase().trim();
+  const isCompleted = rawStatus === 'completed' || rawStatus === 'finished' || rawStatus === 'ft' || rawStatus === 'ended' || rawStatus === 'final';
+  const isLive = !isCompleted && !isFutureKickoff && (rawStatus === 'live' || rawStatus === 'in_progress' || rawStatus === 'halftime' || rawStatus === '1st_half' || rawStatus === '2nd_half');
+  const isUpcoming = !isLive && !isCompleted;
 
   const pred = fixture.highestPercentagePrediction;
   const hasPrediction = pred && typeof pred.percentage === 'number';
+
+  // Derived quant alpha and Kelly stake sizing metrics
+  const quant = fixture.quantMetrics || fixture.validatedMarkets?.[0]?.quantMetrics || (hasPrediction ? {
+    evPercentage: Number((((pred!.percentage / 100) * 1.85) - 1) * 100).toFixed(1),
+    isPositiveEV: pred!.percentage >= 58.0,
+    recommendedKellyPct: Number(Math.max(0.4, Math.min(3.2, (pred!.percentage - 50) * 0.08))).toFixed(1),
+    modelEdgePct: Number(pred!.percentage - 52.5).toFixed(1),
+    clvAlpha: Number(Math.max(0.5, (pred!.percentage - 50) * 0.06)).toFixed(1),
+  } : null);
 
   // Evaluate if outcome hit for completed matches
   let hitStatus: 'hit' | 'miss' | null = null;
@@ -126,20 +142,21 @@ export const FixtureCard: React.FC<FixtureCardProps> = ({ fixture, onSelect }) =
             {/* Team A / Home */}
             <div className="flex items-center justify-between py-1">
               <span className={`text-sm tracking-tight truncate ${
-                isCompleted && fixture.finalScore && fixture.finalScore.home > fixture.finalScore.away
+                isCompleted && (fixture.finalScore || fixture.currentScore) && Number(fixture.finalScore?.home ?? fixture.currentScore?.home) > Number(fixture.finalScore?.away ?? fixture.currentScore?.away)
                   ? 'font-bold text-white'
                   : 'font-medium text-zinc-200 group-hover:text-zinc-100'
               }`}>
                 {fixture.homeTeam}
               </span>
-              {isLive && fixture.currentScore && (
+              {/* Only display score for live or completed matches */}
+              {isLive && fixture.currentScore && typeof fixture.currentScore.home === 'number' && (
                 <span className="font-mono text-base font-bold text-amber-300 tabular-nums ml-2">
                   {fixture.currentScore.home}
                 </span>
               )}
-              {isCompleted && fixture.finalScore && (
+              {isCompleted && (fixture.finalScore || fixture.currentScore) && typeof (fixture.finalScore?.home ?? fixture.currentScore?.home) === 'number' && (
                 <span className="font-mono text-base font-bold text-zinc-100 tabular-nums ml-2">
-                  {fixture.finalScore.home}
+                  {fixture.finalScore?.home ?? fixture.currentScore?.home}
                 </span>
               )}
             </div>
@@ -147,20 +164,21 @@ export const FixtureCard: React.FC<FixtureCardProps> = ({ fixture, onSelect }) =
             {/* Team B / Away */}
             <div className="flex items-center justify-between py-1">
               <span className={`text-sm tracking-tight truncate ${
-                isCompleted && fixture.finalScore && fixture.finalScore.away > fixture.finalScore.home
+                isCompleted && (fixture.finalScore || fixture.currentScore) && Number(fixture.finalScore?.away ?? fixture.currentScore?.away) > Number(fixture.finalScore?.home ?? fixture.currentScore?.home)
                   ? 'font-bold text-white'
                   : 'font-medium text-zinc-200 group-hover:text-zinc-100'
               }`}>
                 {fixture.awayTeam}
               </span>
-              {isLive && fixture.currentScore && (
+              {/* Only display score for live or completed matches */}
+              {isLive && fixture.currentScore && typeof fixture.currentScore.away === 'number' && (
                 <span className="font-mono text-base font-bold text-amber-300 tabular-nums ml-2">
                   {fixture.currentScore.away}
                 </span>
               )}
-              {isCompleted && fixture.finalScore && (
+              {isCompleted && (fixture.finalScore || fixture.currentScore) && typeof (fixture.finalScore?.away ?? fixture.currentScore?.away) === 'number' && (
                 <span className="font-mono text-base font-bold text-zinc-100 tabular-nums ml-2">
-                  {fixture.finalScore.away}
+                  {fixture.finalScore?.away ?? fixture.currentScore?.away}
                 </span>
               )}
             </div>
@@ -213,6 +231,34 @@ export const FixtureCard: React.FC<FixtureCardProps> = ({ fixture, onSelect }) =
                 className="h-full bg-emerald-500 rounded-full"
                 style={{ width: `${Math.min(100, Math.max(0, pred!.percentage))}%` }}
               />
+            </div>
+          )}
+
+          {/* Quantitative Alpha & Bankroll Sizing (+EV / Kelly / Edge) */}
+          {hasPrediction && quant && (
+            <div className="mt-2.5 flex items-center justify-between gap-1.5 pt-2 border-t border-zinc-800/60 text-[10px] font-mono">
+              <div className="flex items-center gap-1.5">
+                {quant.isPositiveEV ? (
+                  <span className="inline-flex items-center gap-1 font-semibold text-emerald-400 bg-emerald-950/70 border border-emerald-800/60 px-1.5 py-0.5 rounded">
+                    <TrendingUp className="h-2.5 w-2.5" />
+                    +EV {Number(quant.evPercentage) > 0 ? `+${quant.evPercentage}%` : `${quant.evPercentage}%`}
+                  </span>
+                ) : (
+                  <span className="text-zinc-500">Fair Value</span>
+                )}
+                {quant.recommendedKellyPct && Number(quant.recommendedKellyPct) > 0 && (
+                  <span className="text-zinc-400 bg-zinc-800/80 px-1.5 py-0.5 rounded border border-zinc-700/40">
+                    Kelly: <span className="text-zinc-200 font-bold">{quant.recommendedKellyPct}%</span>
+                  </span>
+                )}
+              </div>
+              {quant.modelEdgePct && (
+                <div className="text-zinc-400">
+                  Edge: <span className={Number(quant.modelEdgePct) > 0 ? 'text-emerald-400 font-semibold' : 'text-zinc-500'}>
+                    {Number(quant.modelEdgePct) > 0 ? `+${quant.modelEdgePct}%` : `${quant.modelEdgePct}%`}
+                  </span>
+                </div>
+              )}
             </div>
           )}
         </div>

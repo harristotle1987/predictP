@@ -3,7 +3,7 @@ from typing import Dict, Any, List
 from backend.engine.historical_store import get_point_in_time_matches
 from backend.utils.text_normalize import normalize_team_name
 
-CONFIG = {"k": 32, "homeAdv": 65, "init": 1500, "drawBase": 0.26}
+CONFIG = {"k": 32, "homeAdv": 65, "init": 1500}
 
 def compute_historical_elo_ratings(sport: str, cutoff_timestamp: str) -> Dict[str, Dict[str, Any]]:
     if sport != "football":
@@ -50,6 +50,7 @@ def run_football_elo_engine(sport: str, home_team: str, away_team: str, cutoff_t
     if sport != "football":
         raise ValueError(f"Mismatched training sport: {sport}. This model only supports football.")
 
+    matches = get_point_in_time_matches(cutoff_timestamp, "football")
     ratings = compute_historical_elo_ratings("football", cutoff_timestamp)
 
     home_key = normalize_team_name(home_team)
@@ -86,7 +87,10 @@ def run_football_elo_engine(sport: str, home_team: str, away_team: str, cutoff_t
 
     markets: List[Dict[str, Any]] = []
 
-    draw_prob = CONFIG["drawBase"] * math.exp(-math.pow(r_diff, 2) / (2 * math.pow(240, 2)))
+    # Derive baseline draw rate empirically from completed point-in-time matches
+    draw_matches = sum(1 for m in matches if m.get("homeScore") == m.get("awayScore"))
+    empirical_draw_rate = (draw_matches / len(matches)) if matches else 0.25
+    draw_prob = empirical_draw_rate * math.exp(-math.pow(r_diff, 2) / (2 * math.pow(240, 2)))
     non_draw = 1.0 - draw_prob
     p_h = non_draw * p_home_2way
     p_a = non_draw * p_away_2way

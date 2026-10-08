@@ -9,6 +9,7 @@ from backend.engine.validation_and_abstention import validate_market_for_sport
 from backend.engine.pipeline import execute_prediction_pipeline
 from backend.services.feed_service import feed_service
 from backend.db.neon_adapter import neon_adapter
+from backend.db.database_router import database_router
 
 
 class SportDistributionAndPipelineTestSuite(unittest.TestCase):
@@ -22,10 +23,11 @@ class SportDistributionAndPipelineTestSuite(unittest.TestCase):
         c_id: str,
         sport: str,
         pct: float,
-        league: str = "Test League",
-        home: str = "Home Team",
-        away: str = "Away Team"
+        league: str = "Premier League",
+        home: str = "Arsenal FC",
+        away: str = "Chelsea FC"
     ) -> Dict[str, Any]:
+        now_iso = datetime.now(timezone.utc).isoformat()
         return {
             "id": c_id,
             "fixtureId": c_id,
@@ -33,6 +35,9 @@ class SportDistributionAndPipelineTestSuite(unittest.TestCase):
             "league": league,
             "homeTeam": home,
             "awayTeam": away,
+            "kickoffUtc": now_iso,
+            "scheduled_at": now_iso,
+            "kickoff": now_iso,
             "validationStatus": "validated",
             "published": True,
             "calibratedPercentage": pct,
@@ -184,6 +189,7 @@ class SportDistributionAndPipelineTestSuite(unittest.TestCase):
         for i in range(3):
             preds.append(self._make_candidate(f"feed_fb_{i}", "football", 62.0 + i))
 
+        asyncio.run(database_router.predictions.save_predictions(preds))
         asyncio.run(neon_adapter.predictions.save_predictions(preds))
 
         feed = asyncio.run(feed_service.get_feed(sport="all", limit=20))

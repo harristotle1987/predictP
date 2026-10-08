@@ -61,8 +61,10 @@ class Settings(BaseModel):
     r2_region: str = os.getenv("R2_REGION", "auto")
 
     # Operational Fixture Horizon and Ingestion Batching
-    operational_fixture_horizon_days: int = int(os.getenv("OPERATIONAL_FIXTURE_HORIZON_DAYS", "7"))
+    operational_fixture_horizon_days: int = int(os.getenv("OPERATIONAL_FIXTURE_HORIZON_DAYS", "14"))
     fixture_upsert_batch_size: int = int(os.getenv("FIXTURE_UPSERT_BATCH_SIZE", "100"))
+    duckdb_path: str = os.getenv("DUCKDB_PATH", os.path.join(os.getcwd(), "data", "predictpro_operational.duckdb"))
+    DUCKDB_PATH: str = os.getenv("DUCKDB_PATH", os.path.join(os.getcwd(), "data", "predictpro_operational.duckdb"))
 
     # Environment mode: development, test, production
     environment: str = os.getenv("ENVIRONMENT", os.getenv("NODE_ENV", "development"))
@@ -74,10 +76,10 @@ class Settings(BaseModel):
     sports_skills_timeout_ms: int = int(os.getenv("SPORTS_SKILLS_TIMEOUT_MS", "5000"))
     sports_skills_base_url: str = os.getenv("SPORTS_SKILLS_BASE_URL", "https://api.sportsskills.io/v1")
 
-    # Local Cache & Storage Paths for DuckDB and Parquet datasets
-    duckdb_path: str = os.getenv("DUCKDB_PATH", "/app/backend/db/predictpro_persistent.duckdb")
-    duckdb_parquet_path: str = os.getenv("DUCKDB_PARQUET_PATH", "/app/backend/db/parquet")
-    parquet_cache_dir: str = os.getenv("PARQUET_CACHE_DIR", "/app/backend/db/parquet_cache")
+    # Local Cache & Storage Paths for DuckDB and Parquet datasets (dynamically resolved)
+    duckdb_path: str = os.getenv("DUCKDB_PATH") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "db", "predictpro_persistent.duckdb")
+    duckdb_parquet_path: str = os.getenv("DUCKDB_PARQUET_PATH") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "db", "parquet")
+    parquet_cache_dir: str = os.getenv("PARQUET_CACHE_DIR") or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "parquet_cache")
 
     @property
     def DUCKDB_PATH(self) -> str:

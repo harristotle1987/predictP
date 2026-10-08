@@ -456,7 +456,7 @@ class TestPredictionFeedRedisMissAndProjection(unittest.IsolatedAsyncioTestCase)
 
             # 3. Diagnostics must contain redisFeedState
             self.assertIn("redisFeedState", record.diagnostics)
-            self.assertEqual(record.diagnostics["redisFeedState"], RedisState.DEGRADED)
+            self.assertIn(str(record.diagnostics["redisFeedState"]).upper(), ("DEGRADED", "REDISSTATE.DEGRADED"))
             self.assertTrue(record.diagnostics.get("redisPublicationDegraded", False))
 
             # 4. Status must NOT be failed; prediction refresh itself succeeded

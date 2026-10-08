@@ -97,11 +97,21 @@ def validate_fixture_pre_conditions(fixture: Dict[str, Any]) -> Dict[str, Any]:
     5. Today or future Lagos calendar date
     """
     fix_id = fixture.get("id")
-    if not fix_id or not fixture.get("homeTeam") or not fixture.get("awayTeam"):
+    home = fixture.get("homeTeam", "")
+    away = fixture.get("awayTeam", "")
+    if not fix_id or not home or not away:
         return {
             "isValid": False,
             "stopReason": "REJECTED_INVALID",
             "reason": "ABSTAIN: Incomplete fixture metadata (missing ID or team names).",
+        }
+
+    placeholder_terms = {"team a", "team b", "placeholder", "tbd", "unknown team"}
+    if home.strip().lower() in placeholder_terms or away.strip().lower() in placeholder_terms:
+        return {
+            "isValid": False,
+            "stopReason": "REJECTED_PLACEHOLDER_TEAMS",
+            "reason": f"ABSTAIN: Fixture contains generic placeholder teams ('{home}' vs '{away}').",
         }
 
     # Rule: Completed matches must not be presented as current predictions

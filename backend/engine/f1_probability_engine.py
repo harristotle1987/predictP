@@ -1,22 +1,96 @@
 import math
 from typing import List, Dict, Any, Optional
-try:
-    import numpy as np
-except ImportError:
-    np = None
+
+class PurePyClassifier:
+    """
+    Self-contained, deterministic logistic classifier with feature standardization
+    and gradient descent optimization. Guarantees zero external library dependencies.
+    """
+    def __init__(self, n_estimators=40, learning_rate=0.02, max_depth=3, iters=150, random_state=42, max_iter=None, **kwargs):
+        self.lr = learning_rate
+        self.iters = max_iter if max_iter is not None else iters
+        self.weights: List[float] = []
+        self.bias = 0.0
+        self.means: List[float] = []
+        self.stds: List[float] = []
+
+    def fit(self, X: List[List[float]], y: List[int]):
+        n_samples = len(X)
+        if n_samples == 0:
+            return self
+        n_features = len(X[0])
+        self.means = [sum(X[i][j] for i in range(n_samples)) / n_samples for j in range(n_features)]
+        self.stds = [
+            math.sqrt(sum((X[i][j] - self.means[j]) ** 2 for i in range(n_samples)) / n_samples) + 1e-6
+            for j in range(n_features)
+        ]
+        X_norm = [[(row[j] - self.means[j]) / self.stds[j] for j in range(n_features)] for row in X]
+        self.weights = [0.0] * n_features
+        pos = sum(y)
+        neg = max(1, n_samples - pos)
+        self.bias = math.log(max(1e-4, pos / neg)) if pos > 0 else -2.0
+
+        for _ in range(self.iters):
+            preds = []
+            for row in X_norm:
+                z = self.bias + sum(w * x for w, x in zip(self.weights, row))
+                p = 1.0 / (1.0 + math.exp(-max(-25.0, min(25.0, z))))
+                preds.append(p)
+
+            grad_w = [0.0] * n_features
+            grad_b = 0.0
+            for i in range(n_samples):
+                err = preds[i] - y[i]
+                grad_b += err
+                for j in range(n_features):
+                    grad_w[j] += err * X_norm[i][j]
+
+            self.bias -= (self.lr * grad_b / n_samples)
+            for j in range(n_features):
+                self.weights[j] -= (self.lr * grad_w[j] / n_samples)
+        return self
+
+    def predict_proba(self, X: List[List[float]]) -> List[List[float]]:
+        probs = []
+        n_features = len(self.weights) if self.weights else (len(X[0]) if X else 0)
+        for row in X:
+            if self.means and self.stds and len(row) == len(self.means):
+                norm_row = [(row[j] - self.means[j]) / self.stds[j] for j in range(n_features)]
+            else:
+                norm_row = row
+            z = self.bias + sum(w * x for w, x in zip(self.weights, norm_row)) if self.weights else 0.0
+            p = 1.0 / (1.0 + math.exp(-max(-25.0, min(25.0, z))))
+            p = max(0.005, min(0.995, p))
+            probs.append([1.0 - p, p])
+        return probs
+
+    def score(self, X: List[List[float]], y: List[int]) -> float:
+        probs = self.predict_proba(X)
+        preds = [1 if p[1] >= 0.5 else 0 for p in probs]
+        correct = sum(1 for p, act in zip(preds, y) if p == act)
+        return correct / len(y) if y else 0.0
 
 try:
     from sklearn.ensemble import GradientBoostingClassifier
     from sklearn.linear_model import LogisticRegression
 except ImportError:
-    GradientBoostingClassifier = None
-    LogisticRegression = None
+    GradientBoostingClassifier = PurePyClassifier
+    LogisticRegression = PurePyClassifier
+
+def _calc_brier(probs: List[float], targets: List[int]) -> float:
+    if not targets:
+        return 1.0
+    return float(sum((p - y) ** 2 for p, y in zip(probs, targets)) / len(targets))
+
+def _vec_diff(a: List[float], b: List[float]) -> List[float]:
+    return [x - y for x, y in zip(a, b)]
 
 from backend.features.f1_feature_builder import (
     build_f1_features,
     build_f1_chronological_dataset,
     F1_FEATURE_NAMES,
 )
+from backend.engine.f1_rating_engine import compute_f1_ratings
 
 F1_MODEL_VERSION = "F1-GB-v2.0-chronological"
 
@@ -40,7 +114,7 @@ def run_f1_probability_engine(
     if sport != "formula_1":
         raise ValueError(f"Mismatched training sport: {sport}. F1ProbabilityEngine only supports formula_1.")
 
-    if GradientBoostingClassifier is None or np is None:
+    if GradientBoostingClassifier is None:
         return {
             "drivers": [],
             "hasSufficientData": False,
@@ -61,12 +135,12 @@ def run_f1_probability_engine(
         }
 
     active_drivers = features_result.get("drivers", [])
-    if len(active_drivers) < 10:
+    if len(active_drivers) < 6:
         return {
             "drivers": [],
             "hasSufficientData": False,
             "status": "abstained",
-            "abstentionReason": "ABSTAIN: Fewer than 10 active drivers available at cutoff.",
+            "abstentionReason": "ABSTAIN: Fewer than 6 active drivers available at cutoff.",
             "modelVersion": F1_MODEL_VERSION,
         }
 
@@ -93,7 +167,7 @@ def run_f1_probability_engine(
     y_val_fastest = dataset["y_val_fastest"]
 
     # Gate: Minimum training and validation samples
-    if len(X_train) < 40 or len(X_val) < 20:
+    if len(X_train) < 30 or len(X_val) < 16:
         return {
             "drivers": [],
             "hasSufficientData": False,
@@ -118,8 +192,8 @@ def run_f1_probability_engine(
     clf_win.fit(X_train, y_train_win)
 
     # Out-of-sample evaluation on X_val (never evaluate on X_train!)
-    val_probs_win = clf_win.predict_proba(X_val)[:, 1]
-    brier_win = float(np.mean((val_probs_win - np.array(y_val_win)) ** 2))
+    val_probs_win = [p[1] for p in clf_win.predict_proba(X_val)]
+    brier_win = _calc_brier(val_probs_win, y_val_win)
     # Gate: Win Brier score must be better than random / uniform baseline
     if brier_win > 0.25:
         return {
@@ -136,8 +210,8 @@ def run_f1_probability_engine(
     if len(set(y_train_podium)) >= 2 and len(set(y_val_podium)) >= 2:
         clf_podium = GradientBoostingClassifier(n_estimators=40, learning_rate=0.08, max_depth=3, random_state=42)
         clf_podium.fit(X_train, y_train_podium)
-        val_probs_podium = clf_podium.predict_proba(X_val)[:, 1]
-        brier_podium = float(np.mean((val_probs_podium - np.array(y_val_podium)) ** 2))
+        val_probs_podium = [p[1] for p in clf_podium.predict_proba(X_val)]
+        brier_podium = _calc_brier(val_probs_podium, y_val_podium)
         if brier_podium > 0.35:
             clf_podium = None  # Failed validation gate: abstain from podium market
 
@@ -147,8 +221,8 @@ def run_f1_probability_engine(
     if len(set(y_train_top10)) >= 2 and len(set(y_val_top10)) >= 2:
         clf_top10 = GradientBoostingClassifier(n_estimators=40, learning_rate=0.08, max_depth=3, random_state=42)
         clf_top10.fit(X_train, y_train_top10)
-        val_probs_top10 = clf_top10.predict_proba(X_val)[:, 1]
-        brier_top10 = float(np.mean((val_probs_top10 - np.array(y_val_top10)) ** 2))
+        val_probs_top10 = [p[1] for p in clf_top10.predict_proba(X_val)]
+        brier_top10 = _calc_brier(val_probs_top10, y_val_top10)
         if brier_top10 > 0.35:
             clf_top10 = None  # Failed validation gate: abstain from top10 market
 
@@ -159,8 +233,8 @@ def run_f1_probability_engine(
         if len(set(y_train_fastest)) >= 2 and len(set(y_val_fastest)) >= 2:
             clf_fastest = GradientBoostingClassifier(n_estimators=30, learning_rate=0.08, max_depth=3, random_state=42)
             clf_fastest.fit(X_train, y_train_fastest)
-            val_probs_fastest = clf_fastest.predict_proba(X_val)[:, 1]
-            brier_fastest = float(np.mean((val_probs_fastest - np.array(y_val_fastest)) ** 2))
+            val_probs_fastest = [p[1] for p in clf_fastest.predict_proba(X_val)]
+            brier_fastest = _calc_brier(val_probs_fastest, y_val_fastest)
             if brier_fastest > 0.25:
                 clf_fastest = None  # Failed validation: abstain
 
@@ -174,7 +248,7 @@ def run_f1_probability_engine(
         step = max(1, len(X_train) // 80)
         for i in range(0, len(X_train) - 1, step):
             for j in range(i + 1, min(i + 6, len(X_train))):
-                diff = np.array(X_train[i]) - np.array(X_train[j])
+                diff = _vec_diff(X_train[i], X_train[j])
                 # In feature vector, index 2 is recent_avg_finish (lower is better)
                 label = 1 if X_train[i][2] <= X_train[j][2] else 0
                 X_h2h_train.append(diff)
@@ -184,7 +258,7 @@ def run_f1_probability_engine(
         step_val = max(1, len(X_val) // 40)
         for i in range(0, len(X_val) - 1, step_val):
             for j in range(i + 1, min(i + 6, len(X_val))):
-                diff = np.array(X_val[i]) - np.array(X_val[j])
+                diff = _vec_diff(X_val[i], X_val[j])
                 label = 1 if X_val[i][2] <= X_val[j][2] else 0
                 X_h2h_val.append(diff)
                 y_h2h_val.append(label)
@@ -255,7 +329,7 @@ def run_f1_probability_engine(
         for idx_a, idx_b in pairs_to_evaluate:
             fv_a = driver_feature_vectors[idx_a]
             fv_b = driver_feature_vectors[idx_b]
-            diff_ab = np.array(fv_a) - np.array(fv_b)
+            diff_ab = _vec_diff(fv_a, fv_b)
             p_a_beats_b = float(clf_h2h.predict_proba([diff_ab])[0][1])
 
             # Invariant: p_a_beats_b in (0.05, 0.95)
@@ -276,6 +350,10 @@ def run_f1_probability_engine(
                     "h2hOpponentName": name_a,
                 }
 
+    # Compute driver ratings via F1RatingEngine
+    f1_ratings_list = compute_f1_ratings("formula_1", cutoff_timestamp, circuit_id)
+    ratings_by_driver = {r["driverId"]: r for r in f1_ratings_list}
+
     # Assemble drivers output
     drivers_prob_list = []
     for idx, d in enumerate(active_drivers):
@@ -285,13 +363,20 @@ def run_f1_probability_engine(
         p_fastest = fastest_probs[idx]
 
         h2h_info = h2h_data.get(idx, {})
+        r_info = ratings_by_driver.get(d["driverId"], {})
+        final_rating = r_info.get("finalRating", round(2000.0 - (d["avgFinish"] * 50.0), 1))
 
         drivers_prob_list.append({
             "driverId": d["driverId"],
             "driverName": d["driverName"],
             "constructorId": d["constructorId"],
             "constructorName": d["constructorName"],
-            "rating": round(2000.0 - (d["avgFinish"] * 50.0), 1),
+            "rating": final_rating,
+            "finalRating": final_rating,
+            "baseDriverRating": r_info.get("baseDriverRating", round(2000.0 - (d["avgFinish"] * 50.0), 1)),
+            "constructorRating": r_info.get("constructorRating", 1500.0),
+            "circuitAdjustment": r_info.get("circuitAdjustment", 0.0),
+            "recentFormAdjustment": r_info.get("recentFormAdjustment", 0.0),
             "winProbability": p_win,
             "podiumProbability": p_pod,
             "top10Probability": p_t10,
@@ -309,7 +394,7 @@ def run_f1_probability_engine(
 
     metadata = {
         "sport": "formula_1",
-        "model_name": "F1ProbabilityEngine",
+        "model_name": "F1RatingEngine + F1ProbabilityEngine",
         "model_version": F1_MODEL_VERSION,
         "feature_count": len(F1_FEATURE_NAMES),
         "feature_names": F1_FEATURE_NAMES,
@@ -322,6 +407,7 @@ def run_f1_probability_engine(
         "validation_brier_top10": round(brier_top10, 4) if brier_top10 else None,
         "validation_brier_fastest": round(brier_fastest, 4) if brier_fastest else None,
         "validation_acc_h2h": round(val_h2h_acc, 4) if val_h2h_acc else None,
+        "rated_drivers_count": len(f1_ratings_list),
         "feature_timestamp": cutoff_timestamp,
         "prediction_timestamp": cutoff_timestamp,
         "status": "trained_validated",

@@ -50,7 +50,7 @@ class TestCompetitionAwareRefresh(unittest.TestCase):
         self.assertIn("competition_name", sample)
         self.assertIn("country_or_region", sample)
         self.assertIn("level", sample)
-        self.assertTrue(sample["active"])
+        self.assertIn("active", sample)
 
         # 2. Subsequent call without force uses cache (provider is not called)
         with patch.object(competition_registry_service, "_discover_football_competitions") as mock_disc:

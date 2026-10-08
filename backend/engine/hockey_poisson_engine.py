@@ -68,11 +68,29 @@ def run_hockey_poisson_engine(sport: str, home_team: str, away_team: str, cutoff
     h_rec = home_matches[-5:]
     a_rec = away_matches[-5:]
 
-    h_scored = sum(m["homeScore"] if m.get("homeTeamKey") == home_key else m["awayScore"] for m in h_rec) / len(h_rec)
-    h_conceded = sum(m["awayScore"] if m.get("homeTeamKey") == home_key else m["homeScore"] for m in h_rec) / len(h_rec)
+    # Dixon-Coles / penaltyblog exponential time-decay weighting (recency weighting)
+    h_weights = [math.exp(-0.06 * (len(h_rec) - 1 - i)) for i in range(len(h_rec))]
+    h_sum_w = sum(h_weights) if sum(h_weights) > 0 else 1.0
+    a_weights = [math.exp(-0.06 * (len(a_rec) - 1 - i)) for i in range(len(a_rec))]
+    a_sum_w = sum(a_weights) if sum(a_weights) > 0 else 1.0
 
-    a_scored = sum(m["homeScore"] if m.get("homeTeamKey") == away_key else m["awayScore"] for m in a_rec) / len(a_rec)
-    a_conceded = sum(m["awayScore"] if m.get("homeTeamKey") == away_key else m["homeScore"] for m in a_rec) / len(a_rec)
+    h_scored = sum(
+        (m["homeScore"] if m.get("homeTeamKey") == home_key else m["awayScore"]) * w
+        for m, w in zip(h_rec, h_weights)
+    ) / h_sum_w
+    h_conceded = sum(
+        (m["awayScore"] if m.get("homeTeamKey") == home_key else m["homeScore"]) * w
+        for m, w in zip(h_rec, h_weights)
+    ) / h_sum_w
+
+    a_scored = sum(
+        (m["homeScore"] if m.get("homeTeamKey") == away_key else m["awayScore"]) * w
+        for m, w in zip(a_rec, a_weights)
+    ) / a_sum_w
+    a_conceded = sum(
+        (m["awayScore"] if m.get("homeTeamKey") == away_key else m["homeScore"]) * w
+        for m, w in zip(a_rec, a_weights)
+    ) / a_sum_w
 
     h_att = h_scored / avg_league_h
     h_def = h_conceded / avg_league_a

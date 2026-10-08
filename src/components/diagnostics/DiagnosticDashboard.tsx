@@ -23,6 +23,7 @@ import {
   Radio,
 } from 'lucide-react';
 import { diagnosticsService, HealthDiagnosticsResponse, NeonDiagnostics } from '../../services/diagnostics';
+import { apiService } from '../../services/api';
 
 interface DiagnosticDashboardProps {
   onTriggerTest?: () => void;
@@ -31,11 +32,22 @@ interface DiagnosticDashboardProps {
 
 export const DiagnosticDashboard: React.FC<DiagnosticDashboardProps> = ({ onRefreshData }) => {
   const [report, setReport] = useState<HealthDiagnosticsResponse | null>(null);
+  const [compTelemetry, setCompTelemetry] = useState<{
+    rows: Array<{
+      sport: string;
+      competition: string;
+      fixtures_discovered: number;
+      eligible: number;
+      rejected: number;
+      published: number;
+    }>;
+    table: string;
+  } | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [autoRefresh, setAutoRefresh] = useState<boolean>(true);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date>(new Date());
   const [copiedReport, setCopiedReport] = useState<boolean>(false);
-  const [activeTab, setActiveTab] = useState<'pipeline' | 'latency' | 'subsystems' | 'raw'>('pipeline');
+  const [activeTab, setActiveTab] = useState<'pipeline' | 'latency' | 'subsystems' | 'competitions' | 'raw'>('pipeline');
 
   const runDiagnostics = useCallback(async () => {
     setIsLoading(true);
@@ -44,6 +56,16 @@ export const DiagnosticDashboard: React.FC<DiagnosticDashboardProps> = ({ onRefr
       await diagnosticsService.logNeonConnectionDiagnostics(true);
       const data = await diagnosticsService.fetchHealthDiagnostics();
       setReport(data);
+
+      try {
+        const telemRes = await apiService.fetchCompetitionTelemetry();
+        if (telemRes?.data) {
+          setCompTelemetry(telemRes.data);
+        }
+      } catch (tErr) {
+        console.warn('[DiagnosticDashboard] Notice loading competition telemetry:', tErr);
+      }
+
       setLastRefreshedAt(new Date());
     } catch (err) {
       console.error('[DiagnosticDashboard] Failed to run diagnostics:', err);
@@ -232,6 +254,17 @@ export const DiagnosticDashboard: React.FC<DiagnosticDashboardProps> = ({ onRefr
         >
           <Server className="h-3.5 w-3.5" />
           <span>Subsystems Matrix</span>
+        </button>
+        <button
+          onClick={() => setActiveTab('competitions')}
+          className={`flex items-center gap-2 px-3.5 py-1.5 rounded-md text-xs font-medium transition-colors ${
+            activeTab === 'competitions'
+              ? 'bg-emerald-950/60 text-emerald-300 border border-emerald-500/30 font-semibold'
+              : 'text-zinc-400 hover:text-zinc-200'
+          }`}
+        >
+          <Layers className="h-3.5 w-3.5" />
+          <span>Cross-Sport Telemetry</span>
         </button>
         <button
           onClick={() => setActiveTab('raw')}
@@ -794,6 +827,100 @@ export const DiagnosticDashboard: React.FC<DiagnosticDashboardProps> = ({ onRefr
               <span>Fallback:</span>
               <span className="text-zinc-300">Bundled DuckDB Catalog</span>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Tab: Cross-Sport Competition Telemetry */}
+      {activeTab === 'competitions' && (
+        <div className="space-y-4">
+          <div className="rounded-xl border border-zinc-800 bg-[#0c111d] p-5 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800 pb-3">
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-200 flex items-center gap-2">
+                  <Layers className="h-4 w-4 text-emerald-400" />
+                  Cross-Sport Competition Telemetry
+                </h3>
+                <p className="text-[11px] text-zinc-400 mt-0.5">
+                  Real-time audit across Football, Basketball, Baseball, Hockey, and Formula 1 competitions.
+                </p>
+              </div>
+              <div className="text-[11px] font-mono text-zinc-500">
+                Rule: Zero synthetic fixtures · Validation gates enforced
+              </div>
+            </div>
+
+            {/* Quick KPI stats */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 font-mono">
+              <div className="rounded-lg bg-zinc-900/60 border border-zinc-800/80 p-3">
+                <div className="text-[10px] uppercase text-zinc-500">Competitions Active</div>
+                <div className="text-lg font-bold text-white mt-0.5">
+                  {compTelemetry?.rows ? compTelemetry.rows.length : 0}
+                </div>
+              </div>
+              <div className="rounded-lg bg-zinc-900/60 border border-zinc-800/80 p-3">
+                <div className="text-[10px] uppercase text-zinc-500">Fixtures Discovered</div>
+                <div className="text-lg font-bold text-cyan-400 mt-0.5">
+                  {compTelemetry?.rows ? compTelemetry.rows.reduce((acc, r) => acc + (r.fixtures_discovered || 0), 0) : 0}
+                </div>
+              </div>
+              <div className="rounded-lg bg-zinc-900/60 border border-zinc-800/80 p-3">
+                <div className="text-[10px] uppercase text-zinc-500">Eligible Fixtures</div>
+                <div className="text-lg font-bold text-amber-400 mt-0.5">
+                  {compTelemetry?.rows ? compTelemetry.rows.reduce((acc, r) => acc + (r.eligible || 0), 0) : 0}
+                </div>
+              </div>
+              <div className="rounded-lg bg-zinc-900/60 border border-zinc-800/80 p-3">
+                <div className="text-[10px] uppercase text-zinc-500">Published Predictions</div>
+                <div className="text-lg font-bold text-emerald-400 mt-0.5">
+                  {compTelemetry?.rows ? compTelemetry.rows.reduce((acc, r) => acc + (r.published || 0), 0) : 0}
+                </div>
+              </div>
+            </div>
+
+            {/* Telemetry Table */}
+            {compTelemetry?.rows && compTelemetry.rows.length > 0 ? (
+              <div className="overflow-x-auto rounded-lg border border-zinc-800 bg-zinc-950/80">
+                <table className="w-full text-left text-xs font-mono">
+                  <thead className="border-b border-zinc-800 bg-zinc-900/80 text-[11px] text-zinc-400 uppercase tracking-wider">
+                    <tr>
+                      <th className="py-2.5 px-3">Sport</th>
+                      <th className="py-2.5 px-3">Competition</th>
+                      <th className="py-2.5 px-3 text-right">Fixtures Discovered</th>
+                      <th className="py-2.5 px-3 text-right">Eligible</th>
+                      <th className="py-2.5 px-3 text-right">Rejected</th>
+                      <th className="py-2.5 px-3 text-right">Published</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-800/60 text-zinc-300">
+                    {compTelemetry.rows.map((row, idx) => (
+                      <tr key={`${row.sport}-${row.competition}-${idx}`} className="hover:bg-zinc-900/40 transition-colors">
+                        <td className="py-2 px-3 font-semibold text-emerald-400 capitalize">{row.sport.replace('_', ' ')}</td>
+                        <td className="py-2 px-3 text-zinc-200">{row.competition}</td>
+                        <td className="py-2 px-3 text-right text-zinc-300 tabular-nums">{row.fixtures_discovered}</td>
+                        <td className="py-2 px-3 text-right text-amber-400 tabular-nums">{row.eligible}</td>
+                        <td className="py-2 px-3 text-right text-zinc-500 tabular-nums">{row.rejected}</td>
+                        <td className="py-2 px-3 text-right font-bold text-emerald-400 tabular-nums">{row.published}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="rounded-lg border border-dashed border-zinc-800 p-8 text-center text-xs text-zinc-500 font-mono">
+                No active competition runs recorded yet. Trigger a sync or refresh to generate live cross-sport telemetry.
+              </div>
+            )}
+
+            {/* ASCII Output Card */}
+            {compTelemetry?.table && (
+              <div className="space-y-1.5 pt-2">
+                <div className="text-[10px] uppercase font-mono text-zinc-500">Console Table Stream</div>
+                <pre className="rounded-lg bg-zinc-950 p-3.5 border border-zinc-900 text-[11px] font-mono text-zinc-400 overflow-x-auto whitespace-pre">
+                  {compTelemetry.table}
+                </pre>
+              </div>
+            )}
           </div>
         </div>
       )}

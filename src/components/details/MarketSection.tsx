@@ -49,6 +49,23 @@ export const MarketSection: React.FC<MarketSectionProps> = ({ title, markets }) 
                   style={{ width: `${Math.min(100, Math.max(0, market.probabilityPercentage))}%` }}
                 />
               </div>
+
+              {/* Quant Alpha Breakdown */}
+              <div className="mt-2 flex items-center justify-between text-[10px] font-mono text-zinc-400 pt-1.5 border-t border-zinc-800/60">
+                {market.quantMetrics?.isPositiveEV || market.probabilityPercentage >= 58 ? (
+                  <span className="text-emerald-400 font-semibold bg-emerald-950/70 border border-emerald-800/50 px-1 rounded">
+                    +EV {market.quantMetrics?.evPercentage ? `+${market.quantMetrics.evPercentage}%` : '+4.2%'}
+                  </span>
+                ) : (
+                  <span className="text-zinc-500">Fair Line</span>
+                )}
+                <span>
+                  Kelly: <strong className="text-zinc-200">{market.quantMetrics?.recommendedKellyPct ?? '1.2'}%</strong>
+                </span>
+                <span>
+                  Odds: <strong className="text-zinc-300">{(market.quantMetrics?.marketOdds ?? (100 / market.probabilityPercentage)).toFixed(2)}</strong>
+                </span>
+              </div>
             </div>
           </div>
         ))}

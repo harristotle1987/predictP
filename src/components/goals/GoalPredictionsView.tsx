@@ -28,6 +28,18 @@ export const GoalPredictionsView: React.FC<GoalPredictionsViewProps> = ({
   onRefresh,
 }) => {
   const [activeFilter, setActiveFilter] = useState<'all' | 'over_15' | 'over_25' | 'under_25' | 'btts'>('all');
+  const [isRefreshingGoals, setIsRefreshingGoals] = useState<boolean>(false);
+
+  const handleGoalRefresh = async () => {
+    setIsRefreshingGoals(true);
+    try {
+      if (onRefresh) {
+        await onRefresh();
+      }
+    } finally {
+      setIsRefreshingGoals(false);
+    }
+  };
 
   const filteredItems = React.useMemo(() => {
     return goalItems.filter((item) => {
@@ -61,13 +73,13 @@ export const GoalPredictionsView: React.FC<GoalPredictionsViewProps> = ({
             <strong className="text-zinc-200">{filteredItems.length}</strong> signals
           </span>
           <button
-            onClick={onRefresh}
-            disabled={isLoading}
+            onClick={handleGoalRefresh}
+            disabled={isLoading || isRefreshingGoals}
             className="flex h-8 items-center gap-1.5 rounded border border-zinc-700 bg-zinc-800 px-3 text-xs font-medium text-zinc-200 transition-colors hover:bg-zinc-700 hover:text-white disabled:opacity-50"
             title="Refresh prediction pipeline"
           >
-            <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin text-emerald-400' : 'text-zinc-400'}`} />
-            <span>Refresh Predictions</span>
+            <RefreshCw className={`h-3.5 w-3.5 ${isLoading || isRefreshingGoals ? 'animate-spin text-emerald-400' : 'text-zinc-400'}`} />
+            <span>{isRefreshingGoals ? 'Refreshing Goals...' : 'Refresh Predictions'}</span>
           </button>
         </div>
       </div>

@@ -34,7 +34,18 @@ export interface ModelMetadata {
 export interface ScoreState {
   home: number;
   away: number;
+  display?: string;
   periodOrMinute?: string; // e.g. "64'", "Q3 4:12", "Top 7th", "Lap 42/58"
+}
+
+export interface QuantMetrics {
+  evPercentage?: number;
+  isPositiveEV?: boolean;
+  recommendedKellyPct?: number;
+  marketOdds?: number;
+  impliedMarketProb?: number;
+  modelEdgePct?: number;
+  clvAlpha?: number;
 }
 
 export interface MarketItem {
@@ -45,6 +56,7 @@ export interface MarketItem {
   confidenceRating?: 'High' | 'Solid' | 'Moderate';
   sportSpecificCategory?: string;
   isValidated: boolean;
+  quantMetrics?: QuantMetrics;
 }
 
 export interface F1DriverStat {
@@ -120,6 +132,7 @@ export interface ValidatedFixture {
     percentage: number;
   } | null;
   validatedMarkets?: MarketItem[];
+  quantMetrics?: QuantMetrics;
   sportStats?: SportSpecificStats;
   validationStatus?: 'validated' | 'unpredicted' | 'abstained' | 'rejected' | string;
   modelVersion?: PredictionModel;

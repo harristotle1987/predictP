@@ -14,8 +14,17 @@ JOLPICA_HEADERS = {"User-Agent": "PredictPro/1.0 (contact: harristotle84@gmail.c
 class SportsSkillsF1Provider(BaseSportsSkillsAdapter):
     def __init__(self):
         super().__init__("formula_1")
+        self._cached_races: List[Dict[str, Any]] = []
+        self._last_cached_time: float = 0.0
 
     async def fetch_fixtures(self, date_str: str = None) -> List[Dict[str, Any]]:
+        import time
+        now = time.time()
+        if self._cached_races and (now - self._last_cached_time) < 3600.0:
+            if date_str:
+                return [f for f in self._cached_races if f.get("kickoffUtc", "")[:10] == date_str]
+            return list(self._cached_races)
+
         now_dt = datetime.now(timezone.utc)
         now_iso = now_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
         year = now_dt.year
@@ -24,54 +33,75 @@ class SportsSkillsF1Provider(BaseSportsSkillsAdapter):
 
         # 1. Primary: Try Jolpica F1 Ergast API
         try:
-            async with httpx.AsyncClient(timeout=10.0, headers=JOLPICA_HEADERS) as client:
-                resp = await client.get(f"{JOLPICA_BASE_URL}/{year}/races/")
-                if resp.status_code == 200:
-                    data = resp.json()
-                    races = data.get("MRData", {}).get("RaceTable", {}).get("Races", [])
-                    for race in races:
-                        r_round = int(race.get("round", 1))
-                        race_name = race.get("raceName", "Grand Prix")
-                        circuit = race.get("Circuit", {}).get("circuitName", "F1 Circuit")
-                        date_val = race.get("date", "")
-                        time_val = race.get("time", "13:00:00Z").replace("Z", "")
-                        
-                        try:
-                            start_dt = datetime.fromisoformat(f"{date_val}T{time_val}+00:00")
-                            race_iso = start_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-                        except Exception:
-                            race_iso = f"{date_val}T13:00:00Z" if date_val else now_iso
-                            start_dt = now_dt
+            data = None
+            if httpx:
+                try:
+                    async with httpx.AsyncClient(timeout=2.5, headers=JOLPICA_HEADERS) as client:
+                        resp = await client.get(f"{JOLPICA_BASE_URL}/{year}.json")
+                        if resp.status_code == 200:
+                            data = resp.json()
+                except Exception:
+                    data = None
 
-                        status = "scheduled"
-                        display_score = "Upcoming"
-                        if start_dt < now_dt:
-                            status = "completed"
-                            display_score = "Race Concluded"
+            if not data:
+                import urllib.request
+                import json
+                req = urllib.request.Request(f"{JOLPICA_BASE_URL}/{year}.json", headers=JOLPICA_HEADERS)
+                def _fetch_jolpica():
+                    with urllib.request.urlopen(req, timeout=2.5) as uresp:
+                        return json.loads(uresp.read().decode())
+                data = await asyncio.to_thread(_fetch_jolpica)
 
-                        fixtures.append({
-                            "id": f"f1_{year}_{r_round:02d}",
-                            "source_event_id": str(r_round),
-                            "sport": "formula_1",
-                            "league": f"Formula 1 · {race_name}",
-                            "competition_id": f"f1_{year}",
-                            "competitionTier": "primary",
-                            "homeTeam": "F1 Drivers Field",
-                            "awayTeam": "F1 Constructors Field",
-                            "home_team_id": "f1_drivers",
-                            "away_team_id": "f1_constructors",
-                            "circuit": circuit,
-                            "kickoffUtc": race_iso,
-                            "scheduled_at": race_iso,
-                            "status": status,
-                            "currentScore": {
-                                "home": 0,
-                                "away": 0,
-                                "display": display_score,
-                            },
-                            "source_updated_at": now_iso,
-                            "provider": "jolpica-f1",
-                        })
+            if isinstance(data, dict):
+                races = data.get("MRData", {}).get("RaceTable", {}).get("Races", [])
+                for race in races:
+                    r_round = int(race.get("round", 1))
+                    race_name = race.get("raceName", "Grand Prix")
+                    circuit = race.get("Circuit", {}).get("circuitName", "F1 Circuit")
+                    date_val = race.get("date", "")
+                    time_val = race.get("time", "13:00:00Z").replace("Z", "")
+                    
+                    try:
+                        start_dt = datetime.fromisoformat(f"{date_val}T{time_val}+00:00")
+                        race_iso = start_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+                    except Exception:
+                        race_iso = f"{date_val}T13:00:00Z" if date_val else now_iso
+                        start_dt = now_dt
+
+                    status = "scheduled"
+                    display_score = "Upcoming"
+                    if start_dt < now_dt:
+                        status = "completed"
+                        display_score = "Race Concluded"
+
+                    score_obj = None
+                    if status == "completed":
+                        score_obj = {
+                            "home": 0,
+                            "away": 0,
+                            "display": display_score,
+                        }
+
+                    fixtures.append({
+                        "id": f"f1_{year}_{r_round:02d}",
+                        "source_event_id": str(r_round),
+                        "sport": "formula_1",
+                        "league": f"Formula 1 · {race_name}",
+                        "competition_id": f"f1_{year}",
+                        "competitionTier": "primary",
+                        "homeTeam": "F1 Drivers Field",
+                        "awayTeam": "F1 Constructors Field",
+                        "home_team_id": "f1_drivers",
+                        "away_team_id": "f1_constructors",
+                        "circuit": circuit,
+                        "kickoffUtc": race_iso,
+                        "scheduled_at": race_iso,
+                        "status": status,
+                        "currentScore": score_obj,
+                        "finalScore": score_obj if status == "completed" else None,
+                        "source_updated_at": now_iso,
+                        "provider": "jolpica-f1",
+                    })
         except Exception as e:
             errors.append(f"Jolpica F1 API error: {e}")
 
@@ -100,10 +130,16 @@ class SportsSkillsF1Provider(BaseSportsSkillsAdapter):
                         dt = now_dt
 
                     status = "scheduled"
-                    display_score = "Upcoming"
                     if dt < now_dt:
                         status = "completed"
-                        display_score = "Race Concluded"
+
+                    score_obj = None
+                    if status == "completed":
+                        score_obj = {
+                            "home": 0,
+                            "away": 0,
+                            "display": "Race Concluded",
+                        }
 
                     r_round = int(r.get("round_number", 1))
                     fixtures.append({
@@ -120,21 +156,28 @@ class SportsSkillsF1Provider(BaseSportsSkillsAdapter):
                         "kickoffUtc": race_iso,
                         "scheduled_at": race_iso,
                         "status": status,
-                        "currentScore": {
-                            "home": 0,
-                            "away": 0,
-                            "display": display_score,
-                        },
+                        "currentScore": score_obj,
+                        "finalScore": score_obj if status == "completed" else None,
                         "source_updated_at": now_iso,
                         "provider": "machina-sports/sports-skills",
                     })
             except Exception as e:
                 errors.append(f"SportsSkills F1 error: {e}")
 
-        if not fixtures:
-            raise RuntimeError(f"F1 provider failed to fetch real schedule. Errors: {errors}")
+        if fixtures:
+            self._cached_races = list(fixtures)
+            self._last_cached_time = now
+            if date_str:
+                matched_races = [f for f in fixtures if f.get("kickoffUtc", "")[:10] == date_str]
+                if matched_races:
+                    return matched_races
+                # Fall back to confirmed provider schedule for this date
+                from backend.providers.api_sports_provider import api_sports_provider
+                return await api_sports_provider.fetch_fixtures("formula_1", date_str=date_str)
+            return fixtures
 
-        return fixtures
+        from backend.providers.api_sports_provider import api_sports_provider
+        return await api_sports_provider.fetch_fixtures("formula_1", date_str=date_str)
 
     async def get_jolpica_race_results(self, season: int, round_num: int) -> Dict[str, Any]:
         async with httpx.AsyncClient(timeout=10.0, headers=JOLPICA_HEADERS) as client:

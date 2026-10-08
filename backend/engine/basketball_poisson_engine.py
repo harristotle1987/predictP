@@ -65,44 +65,53 @@ def run_basketball_poisson_engine(sport: str, home_team: str, away_team: str, cu
     a_att = a_scored / avg_league_a
     a_def = a_conceded / avg_league_h
 
-    lmbda = max(20.0, h_att * a_def * avg_league_h)
-    mu = max(20.0, a_att * h_def * avg_league_a)
+    lmbda = h_att * a_def * avg_league_h
+    mu = a_att * h_def * avg_league_a
 
     markets: List[Dict[str, Any]] = []
 
-    # Moneyline distribution derived from Poisson attack/defense parameters
-    p_home = 1.0 / (1.0 + math.exp(-(lmbda - mu) / 8.0))
+    # Moneyline distribution derived from Poisson attack/defense parameters using normal approximation of Skellam difference
+    variance = max(1.0, lmbda + mu)
+    std_dev = math.sqrt(variance)
+    diff = lmbda - mu
+    # Normal CDF via math.erf
+    p_home = 0.5 * (1.0 + math.erf(diff / (std_dev * math.sqrt(2.0))))
+    p_home = max(0.05, min(0.95, p_home))
     p_away = 1.0 - p_home
+
     markets.append({
         "marketName": "Moneyline",
         "selection": f"{home_team} Win",
-        "rawProbability": p_home,
+        "rawProbability": round(p_home, 4),
         "modelSource": "POISSON",
         "marketCategory": "Moneyline",
     })
     markets.append({
         "marketName": "Moneyline",
         "selection": f"{away_team} Win",
-        "rawProbability": p_away,
+        "rawProbability": round(p_away, 4),
         "modelSource": "POISSON",
         "marketCategory": "Moneyline",
     })
 
     total_exp = lmbda + mu
     benchmark = (avg_league_h + avg_league_a)
-    diff = total_exp - benchmark
-    p_over = 1.0 / (1.0 + math.exp(-diff / 10.0))
+    tot_diff = total_exp - benchmark
+    tot_std = math.sqrt(max(1.0, total_exp))
+    p_over = 0.5 * (1.0 + math.erf(tot_diff / (tot_std * math.sqrt(2.0))))
+    p_over = max(0.05, min(0.95, p_over))
+
     markets.append({
         "marketName": f"Over / Under {round(benchmark, 1)} Points",
         "selection": f"Over {round(benchmark, 1)} Points",
-        "rawProbability": p_over,
+        "rawProbability": round(p_over, 4),
         "modelSource": "POISSON",
         "marketCategory": "PointsTotal",
     })
     markets.append({
         "marketName": f"Over / Under {round(benchmark, 1)} Points",
         "selection": f"Under {round(benchmark, 1)} Points",
-        "rawProbability": 1.0 - p_over,
+        "rawProbability": round(1.0 - p_over, 4),
         "modelSource": "POISSON",
         "marketCategory": "PointsTotal",
     })

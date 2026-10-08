@@ -14,7 +14,7 @@ from backend.services.competition_registry import competition_registry_service
 from backend.services.data_access.refresh_state_repository import refresh_state_repository
 from backend.config import settings
 
-OPERATIONAL_FIXTURE_HORIZON_DAYS = int(getattr(settings, "operational_fixture_horizon_days", 7))
+OPERATIONAL_FIXTURE_HORIZON_DAYS = int(getattr(settings, "operational_fixture_horizon_days", 14))
 LAGOS_TZ = timezone(timedelta(hours=1))
 
 def get_current_lagos_today() -> str:
@@ -47,18 +47,24 @@ class RefreshPlanner:
         """Computes authoritative Africa/Lagos target date window."""
         if date_range and len(date_range) > 0:
             return sorted(list(set(date_range)))
-        if date:
+
+        if date and horizon_days is None:
             return [date]
 
-        if horizon_days is None:
-            horizon_days = getattr(settings, "operational_fixture_horizon_days", 7)
-        horizon_days = max(1, horizon_days)
+        h_days = horizon_days if horizon_days is not None else int(getattr(settings, "operational_fixture_horizon_days", 7))
+        if date and h_days == 1:
+            return [date]
 
         now_lagos = datetime.now(LAGOS_TZ)
-        today = now_lagos.strftime("%Y-%m-%d")
-        window = [today]
-        for i in range(1, horizon_days):
-            next_d = (now_lagos + timedelta(days=i)).strftime("%Y-%m-%d")
+        start_date_str = date or now_lagos.strftime("%Y-%m-%d")
+        try:
+            base_dt = datetime.strptime(start_date_str, "%Y-%m-%d")
+        except Exception:
+            base_dt = now_lagos
+
+        window = []
+        for i in range(h_days):
+            next_d = (base_dt + timedelta(days=i)).strftime("%Y-%m-%d")
             window.append(next_d)
         return window
 

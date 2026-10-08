@@ -38,12 +38,17 @@ from backend.engine.calibration import (
     get_calibration_details,
 )
 from backend.engine.confidence import calculate_confidence
+from backend.engine.quant_analytics import calculate_quant_metrics
 from backend.engine.validation_and_abstention import (
     validate_fixture_pre_conditions,
     validate_market_publication,
     filter_publishable_markets,
 )
-from backend.engine.ranking import rank_and_select_best_of_day
+from backend.engine.ranking import (
+    rank_and_select_best_of_day,
+    build_competition_telemetry,
+    format_competition_telemetry_table,
+)
 
 VALID_MODELS = [
     "ELO",
@@ -131,13 +136,13 @@ def execute_prediction_pipeline(
         home = fix.get("homeTeam", "")
         away = fix.get("awayTeam", "")
         cutoff = fix.get("kickoffUtc") or fix.get("scheduled_at") or datetime.now(timezone.utc).isoformat()
-        current_score = fix.get("currentScore")
         raw_status = str(fix.get("status", "scheduled")).lower().strip()
         match_status = (
-            "live" if raw_status == "live"
-            else "completed" if raw_status == "completed"
+            "completed" if raw_status in ("completed", "finished", "ft", "ended")
+            else "live" if raw_status in ("live", "in_progress", "halftime", "1st_half", "2nd_half")
             else "upcoming"
         )
+        current_score = fix.get("currentScore") if match_status in ("live", "completed") else None
 
         # 1. Structural Pre-Condition Validation
         pre_val = validate_fixture_pre_conditions(fix)
@@ -331,7 +336,7 @@ def execute_prediction_pipeline(
                 sport=sport,
                 model=active_model,
                 market=raw_m.get("marketName", "default"),
-                allow_baseline=(not is_subscriber_feed),
+                allow_baseline=False,
             )
             cal_prob = cal_details.get("calibrated_probability")
             cal_pct = cal_details.get("calibrated_percentage")
@@ -352,7 +357,7 @@ def execute_prediction_pipeline(
                     "calibratedPercentage": cal_pct,
                     "confidenceScore": conf["score"],
                     "hasSufficientData": True,
-                    "marketCategory": raw_m["marketCategory"],
+                    "marketCategory": raw_m.get("marketCategory") or raw_m.get("marketType") or "1X2",
                     "isCalibrated": cal_details["is_calibrated"],
                     "calibrationStatus": cal_details["calibration_status"],
                     "calibrationId": cal_details["calibration_id"],
@@ -375,20 +380,22 @@ def execute_prediction_pipeline(
             calibrated_markets.append({
                 "marketName": raw_m["marketName"],
                 "selection": raw_m["selection"],
+                "rawProbability": raw_m.get("rawProbability"),
+                "probabilityPercentage": raw_m.get("probabilityPercentage"),
                 "calibratedProbability": cal_prob,
                 "calibratedPercentage": cal_pct,
                 "confidenceScore": conf["score"],
                 "confidenceRating": conf["rating"],
                 "isPublishable": val["isPublishable"],
                 "abstentionReason": val.get("abstentionReason"),
-                "marketCategory": raw_m["marketCategory"],
+                "marketCategory": raw_m.get("marketCategory") or raw_m.get("marketType") or "1X2",
             })
 
         valid_markets = filter_publishable_markets(calibrated_markets, is_subscriber_feed)
         is_val = len(valid_markets) > 0
 
         if not is_val:
-            if any(code in ("UNCALIBRATED_ABSTAIN", "REJECTED_CALIBRATION", "CANDIDATE_NOT_PRODUCTION", "NO_VALIDATED_PRODUCTION_CALIBRATION") for code in market_stop_codes) or not market_stop_codes:
+            if any(code in ("UNCALIBRATED_ABSTAIN", "REJECTED_CALIBRATION", "CANDIDATE_NOT_PRODUCTION", "NO_VALIDATED_PRODUCTION_CALIBRATION", "CALIBRATION_UNAVAILABLE") for code in market_stop_codes) or not market_stop_codes:
                 fixture_stop_reason = "NO_VALIDATED_PRODUCTION_CALIBRATION"
             else:
                 fixture_stop_reason = market_stop_codes[0]
@@ -438,14 +445,23 @@ def execute_prediction_pipeline(
 
         market_items = []
         for idx, m in enumerate(r["markets"]):
+            cal_p = m.get("calibratedProbability")
+            if cal_p is None:
+                cal_pct = m.get("calibratedPercentage") or m.get("probabilityPercentage") or 50.0
+                cal_p = float(cal_pct) / 100.0
+            q_metrics = calculate_quant_metrics(cal_p)
+            prob_pct = m.get("probabilityPercentage")
+            if prob_pct is None:
+                prob_pct = m.get("calibratedPercentage") if m.get("calibratedPercentage") is not None else round(cal_p * 100.0, 1)
             market_items.append({
                 "id": f"{r['fixtureId']}-m{idx+1}",
                 "marketName": m["marketName"],
                 "selection": m["selection"],
-                "probabilityPercentage": m["calibratedPercentage"],
-                "confidenceRating": m["confidenceRating"],
-                "sportSpecificCategory": m["marketCategory"],
+                "probabilityPercentage": prob_pct,
+                "confidenceRating": m.get("confidenceRating", "HIGH"),
+                "sportSpecificCategory": m.get("marketCategory", "General"),
                 "isValidated": True,
+                "quantMetrics": q_metrics,
             })
 
         sport_stats: Dict[str, Any] = {}
@@ -488,9 +504,14 @@ def execute_prediction_pipeline(
                 sport_stats["constructorStanding"] = top_d.get("constructorName")
                 sport_stats["poleConversionRate"] = top_d.get("poleConversionRate")
 
-        highest_m = market_items[0]
+        highest_m = max(
+            market_items,
+            key=lambda m: float(m.get("probabilityPercentage") or 0.0)
+        )
         meta = r.get("metadata") or {}
-        first_m_raw = r["markets"][0].get("calibratedProbability", 0.5) if r.get("markets") else 0.5
+        highest_calibrated_probability = float(
+            highest_m.get("probabilityPercentage", 0.0)
+        ) / 100.0
 
         # Format event_date_lagos
         event_date_lagos = ""
@@ -504,9 +525,11 @@ def execute_prediction_pipeline(
 
         published_feed.append({
             "id": r["fixtureId"],
+            "fixtureId": r["fixtureId"],
             "fixture_id": r["fixtureId"],
             "sport": r["sport"],
             "league": r["league"],
+            "competition": r["league"],
             "event_date_lagos": event_date_lagos,
             "homeTeam": r["homeTeam"],
             "awayTeam": r["awayTeam"],
@@ -516,11 +539,12 @@ def execute_prediction_pipeline(
             "opponent": r["awayTeam"] if r["sport"] not in {"formula_1", "f1"} else None,
             "kickoffUtc": r["kickoffUtc"],
             "status": r["status"],
-            "currentScore": r["currentScore"],
+            "currentScore": r["currentScore"] if r["status"] in ("live", "completed") else None,
+            "finalScore": r["currentScore"] if r["status"] == "completed" else None,
             "market": highest_m["marketName"],
             "selection": highest_m["selection"],
-            "raw_probability": first_m_raw,
-            "calibrated_probability": first_m_raw,
+            "raw_probability": highest_calibrated_probability,
+            "calibrated_probability": highest_calibrated_probability,
             "percentage": highest_m["probabilityPercentage"],
             "model": meta.get("model_name", r["modelVersion"]),
             "model_version": meta.get("model_version", "v1"),
@@ -532,6 +556,7 @@ def execute_prediction_pipeline(
                 "selection": highest_m["selection"],
                 "percentage": highest_m["probabilityPercentage"],
             },
+            "quantMetrics": highest_m.get("quantMetrics"),
             "validatedMarkets": market_items,
             "sportStats": sport_stats,
             "validationStatus": "validated",
@@ -543,6 +568,89 @@ def execute_prediction_pipeline(
             "training_window": meta.get("training_window"),
         })
 
+    # Build Per-Sport Auditable Report
+    SPORTS_LIST = ["football", "basketball", "baseball", "hockey", "formula_1"]
+    per_sport_audit: Dict[str, Any] = {}
+    audit_table_rows = ["Sport | Discovered | History Eligible | Elo/Engine | Poisson | Calibrated | Publishable | Primary Rejection Reason"]
+
+    for sp in SPORTS_LIST:
+        sp_cands = [c for c in candidates if (c.get("sport") or "football").lower().strip() in (sp, "ice_hockey" if sp == "hockey" else ("f1" if sp == "formula_1" else sp))]
+        sp_results = [r for r in execution_results if r.get("sport") in (sp, "ice_hockey" if sp == "hockey" else ("f1" if sp == "formula_1" else sp))]
+        sp_published = [p for p in published_feed if p.get("sport") in (sp, "ice_hockey" if sp == "hockey" else ("f1" if sp == "formula_1" else sp))]
+
+        sp_disc = len(sp_cands)
+        sp_hist_elig = len([r for r in sp_results if r.get("stopReason") not in ("REJECTED_INVALID", "REJECTED_PAST", "REJECTED_COMPLETED", "INVALID_PRECONDITION", "invalid_fixture")])
+        sp_elo = len([r for r in sp_results if r.get("stopReason") not in ("REJECTED_INVALID", "REJECTED_PAST", "REJECTED_COMPLETED", "INVALID_PRECONDITION", "INSUFFICIENT_HISTORY") and r.get("features", {}).get("hasSufficientData")])
+        sp_poiss = len([r for r in sp_results if r.get("stopReason") not in ("REJECTED_INVALID", "REJECTED_PAST", "REJECTED_COMPLETED", "INVALID_PRECONDITION", "INSUFFICIENT_HISTORY") and r.get("features", {}).get("hasSufficientData")])
+        sp_cal = len([r for r in sp_results if any(m.get("calibratedProbability") is not None for m in r.get("markets", []))])
+        sp_pub = len(sp_published)
+
+        # Categorize rejection counts
+        rej_no_fix = 1 if sp_disc == 0 else 0
+        rej_team_unmatched = len([r for r in sp_results if r.get("stopReason") in ("TEAM_NOT_MATCHED", "REJECTED_INVALID", "INVALID_PRECONDITION") or not r.get("homeTeam") or not r.get("awayTeam")])
+        rej_insufficient_hist = len([r for r in sp_results if r.get("stopReason") in ("INSUFFICIENT_HISTORY", "insufficient_history")])
+        rej_eng_fail = len([r for r in sp_results if r.get("stopReason") in ("ENGINE_FAILURE", "MODEL_NO_OUTPUT", "SPORT_MISMATCH", "model_failure")])
+        rej_cal_unavail = len([r for r in sp_results if r.get("stopReason") in ("NO_VALIDATED_PRODUCTION_CALIBRATION", "UNCALIBRATED_ABSTAIN", "REJECTED_CALIBRATION", "CALIBRATION_UNAVAILABLE", "calibration_unavailable")])
+        rej_inv_mkt = len([r for r in sp_results if r.get("stopReason") in ("INVALID_MARKET", "SPORT_MISMATCH", "unsupported_market")])
+        rej_low_conf = len([r for r in sp_results if r.get("stopReason") in ("LOW_CONFIDENCE", "confidence_gate_failed")])
+        rej_abstained = len([r for r in sp_results if r.get("validationStatus") == "abstained"])
+        rej_not_pub = len([r for r in sp_results if r.get("stopReason") in ("NOT_PUBLISHABLE", "LOW_PROBABILITY", "INVALID_PROBABILITY", "publication_gate_failed")])
+
+        exact_reason = None
+        if sp_disc == 0:
+            exact_reason = "NO_FIXTURES: No future fixtures returned by provider."
+        elif sp_pub == 0:
+            if rej_team_unmatched > 0:
+                exact_reason = "TEAM_NOT_MATCHED: Competitor names missing or unmatched in provider response."
+            elif rej_insufficient_hist > 0:
+                exact_reason = f"INSUFFICIENT_HISTORY: Point-in-time completed matches < 5 before kickoff for candidate fixtures."
+            elif rej_eng_fail > 0:
+                exact_reason = "ENGINE_FAILURE: Engine produced zero valid probability distribution outputs."
+            elif rej_cal_unavail > 0:
+                exact_reason = "CALIBRATION_UNAVAILABLE: No validated production calibration curve available for market."
+            elif rej_low_conf > 0:
+                exact_reason = "LOW_CONFIDENCE: Candidate failed the production confidence gate (score < 0.50)."
+            else:
+                first_diag = next((r.get("abstentionDiagnostics", ["ABSTAINED"])[0] for r in sp_results if r.get("abstentionDiagnostics")), "ABSTAINED: Failed production validation.")
+                exact_reason = f"ABSTAINED: {first_diag}"
+
+        per_sport_audit[sp] = {
+            "sport": sp,
+            "discovered": sp_disc,
+            "history_eligible": sp_hist_elig,
+            "elo_successful": sp_elo,
+            "poisson_successful": sp_poiss,
+            "engine_successful": sp_elo,
+            "calibrated": sp_cal,
+            "publishable": sp_pub,
+            "rejection_counts": {
+                "NO_FIXTURES": rej_no_fix,
+                "TEAM_NOT_MATCHED": rej_team_unmatched,
+                "INSUFFICIENT_HISTORY": rej_insufficient_hist,
+                "ENGINE_FAILURE": rej_eng_fail,
+                "CALIBRATION_UNAVAILABLE": rej_cal_unavail,
+                "INVALID_MARKET": rej_inv_mkt,
+                "LOW_CONFIDENCE": rej_low_conf,
+                "ABSTAINED": rej_abstained,
+                "NOT_PUBLISHABLE": rej_not_pub,
+            },
+            "exact_rejection_reason": exact_reason,
+        }
+
+        primary_rej_short = exact_reason.split(":")[0] if exact_reason else "NONE (Published)"
+        audit_table_rows.append(f"{sp} | {sp_disc} | {sp_hist_elig} | {sp_elo} | {sp_poiss} | {sp_cal} | {sp_pub} | {primary_rej_short}")
+
+    audit_table_str = "\n".join(audit_table_rows)
+
+    comp_telemetry = build_competition_telemetry(candidates, execution_results, published_feed)
+    comp_telemetry_table = format_competition_telemetry_table(comp_telemetry)
+    print("\n--- PredictPro Per-Sport Audit Report ---")
+    print(audit_table_str)
+    print("----------------------------------------")
+    print("\n--- PredictPro Cross-Sport Telemetry ---")
+    print(comp_telemetry_table)
+    print("----------------------------------------\n")
+
     return {
         "modelVersion": active_model,
         "isProductionModel": is_production_model(active_model),
@@ -553,8 +661,18 @@ def execute_prediction_pipeline(
         "publishedFeed": published_feed[:20],
         "allResults": execution_results,
         "diagnostics": {
+            "fixturesDiscovered": len(candidates),
+            "fixtures_discovered": len(candidates),
             "fixturesEligible": fixtures_eligible,
             "fixturesEligibleForPrediction": fixtures_eligible,
+            "predictionsValidated": len(validated_candidates),
+            "predictions_validated": len(validated_candidates),
+            "predictionsPublished": len(published_feed),
+            "predictions_published": len(published_feed),
+            "sportsRepresented": len({p.get("sport") for p in published_feed if p.get("sport")}),
+            "sports_represented": len({p.get("sport") for p in published_feed if p.get("sport")}),
+            "leaguesRepresented": len({p.get("league") or p.get("competition") for p in published_feed if (p.get("league") or p.get("competition"))}),
+            "leagues_represented": len({p.get("league") or p.get("competition") for p in published_feed if (p.get("league") or p.get("competition"))}),
             "fixturesRejectedInvalid": fixtures_rejected_invalid,
             "fixturesRejectedPast": fixtures_rejected_past,
             "fixturesRejectedCompleted": fixtures_rejected_completed,
@@ -573,5 +691,13 @@ def execute_prediction_pipeline(
             "predictionsPublished": len(published_feed),
             "publishedPredictions": len(published_feed),
             "candidateStopReasons": candidate_stop_reasons,
+            "perSportAudit": per_sport_audit,
+            "per_sport_audit": per_sport_audit,
+            "perSportAuditTable": audit_table_str,
+            "per_sport_audit_table": audit_table_str,
+            "competitionTelemetry": comp_telemetry,
+            "competition_telemetry": comp_telemetry,
+            "competitionTelemetryTable": comp_telemetry_table,
+            "competition_telemetry_table": comp_telemetry_table,
         },
     }

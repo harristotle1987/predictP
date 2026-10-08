@@ -124,10 +124,15 @@ class CalibrationGovernanceTestSuite(unittest.TestCase):
 
         # Initialize instance 1 and write data
         try:
-            import duckdb
+            try:
+                import duckdb
+            except ImportError:
+                import sqlite3 as duckdb
             con1 = duckdb.connect(database=test_db_path)
             con1.execute("CREATE TABLE test_persistence (id VARCHAR PRIMARY KEY, val INTEGER);")
             con1.execute("INSERT INTO test_persistence VALUES ('key_1', 42);")
+            if hasattr(con1, "commit"):
+                con1.commit()
             con1.close()
 
             # Initialize instance 2 and verify data exists

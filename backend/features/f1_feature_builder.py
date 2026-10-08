@@ -80,7 +80,7 @@ def build_f1_features(cutoff_timestamp: str, circuit_id: str = "all") -> Dict[st
     """
     try:
         rel = duckdb_engine.con.execute(query, [cutoff_timestamp])
-        cols = [desc[0] for desc in rel.description] if rel.description else []
+        cols = [desc[0] if isinstance(desc, (tuple, list)) else desc for desc in rel.description] if rel.description else []
         rows = [dict(zip(cols, r)) for r in rel.fetchall()]
     except Exception as e:
         print(f"[F1FeatureBuilder] Query error: {e}")
@@ -241,12 +241,12 @@ def build_f1_features(cutoff_timestamp: str, circuit_id: str = "all") -> Dict[st
         "drivers": sorted(driver_features, key=lambda x: x["avgFinish"]),
         "constructors": list(constructor_features.values()),
         "circuitStats": {"circuitId": circuit_id},
-        "hasSufficientData": len(driver_features) >= 10,
+        "hasSufficientData": len(driver_features) >= 5,
     }
 
 def build_f1_chronological_dataset(
     cutoff_timestamp: str,
-    min_prior_races: int = 4,
+    min_prior_races: int = 2,
 ) -> Dict[str, Any]:
     """
     Builds a chronological training and validation dataset of individual driver-race entries.
@@ -271,7 +271,7 @@ def build_f1_chronological_dataset(
     """
     try:
         rel = duckdb_engine.con.execute(query, [cutoff_timestamp])
-        cols = [desc[0] for desc in rel.description] if rel.description else []
+        cols = [desc[0] if isinstance(desc, (tuple, list)) else desc for desc in rel.description] if rel.description else []
         rows = [dict(zip(cols, r)) for r in rel.fetchall()]
     except Exception as e:
         print(f"[F1Dataset] Query error: {e}")
@@ -428,7 +428,7 @@ def build_f1_chronological_dataset(
         past_rows.extend(race_rows)
 
     return {
-        "hasSufficientData": len(X_train) >= 40 and len(X_val) >= 20,
+        "hasSufficientData": len(X_train) >= 30 and len(X_val) >= 16,
         "training_races": len(train_race_keys),
         "validation_races": len(val_race_keys),
         "X_train": X_train,

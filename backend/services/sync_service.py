@@ -73,13 +73,13 @@ class SyncService:
 
     async def _get_cached_fixtures_for_sport_date(self, sport: str, d_str: str) -> List[Dict[str, Any]]:
         """
-        Targeted indexed query for cached operational fixtures for a specific sport and date.
-        Replaces broad collection find() with indexed date queries and projections.
+        Targeted query for cached operational fixtures for a specific sport and date from DuckDB staging.
+        Never queries Neon during discovery.
         """
         try:
-            return await database_router.fixtures.get_by_date_and_sport(d_str, sport=sport, limit=100)
+            return duckdb_engine.get_staged_fixtures(sport, d_str)
         except Exception as e:
-            print(f"[SyncService] Targeted cached fixtures query notice for {sport} {d_str}: {e}")
+            print(f"[SyncService] DuckDB cached fixtures query notice for {sport} {d_str}: {e}")
             return []
 
     async def is_sport_date_fresh(self, sport: str, date_str: str, status_category: str = "upcoming_today") -> bool:
@@ -207,6 +207,7 @@ class SyncService:
         queried_dates: List[str] = []
 
         registry_comps = await competition_registry_service.get_or_discover_competitions("basketball", force=force)
+        comp_map = {c.get("competition_id"): c for c in registry_comps if c.get("competition_id")}
         competitions_checked = len(registry_comps)
 
         for d_str in date_range:
@@ -229,6 +230,22 @@ class SyncService:
             calls_executed += 1
             try:
                 date_fixtures = await basketball_adapter.fetch_fixtures(date_str=d_str)
+                for fix in date_fixtures:
+                    raw_league = fix.get("league", "")
+                    raw_comp_id = fix.get("competition_id", "")
+                    matched_comp = comp_map.get(raw_comp_id) or competition_registry_service.match_competition_name(raw_league, registry_comps)
+                    if matched_comp:
+                        fix["competition_id"] = matched_comp.get("competition_id", raw_comp_id or "nba")
+                        fix["league"] = matched_comp.get("competition_name", raw_league or "NBA")
+                        fix["competition_name"] = matched_comp.get("competition_name", raw_league or "NBA")
+                        fix["season"] = matched_comp.get("current_season", "2026/2027")
+                        fix["country_or_region"] = matched_comp.get("country_or_region", "USA")
+                        fix["competitionTier"] = "primary" if matched_comp.get("priority", 1) == 1 else "secondary"
+                    else:
+                        fix["competition_id"] = raw_comp_id or "nba"
+                        fix["competition_name"] = raw_league or "NBA"
+                        fix["league"] = raw_league or "NBA"
+                        fix["season"] = fix.get("season") or "2026/2027"
                 fixtures.extend(date_fixtures)
                 await self.mark_sport_date_fresh("basketball", d_str, len(date_fixtures))
                 if call_budget:
@@ -237,6 +254,15 @@ class SyncService:
                 errors.append(f"SportsSkills Basketball error for date {d_str}: {str(e)}")
                 if call_budget:
                     call_budget.record_failure()
+
+        if competitions:
+            norm_req = {self._normalize_slug(c) for c in competitions}
+            fixtures = [
+                f for f in fixtures
+                if self._normalize_slug(f.get("competition_id", "")) in norm_req
+                or self._normalize_slug(f.get("league", "")) in norm_req
+                or self._normalize_slug(f.get("competition_name", "")) in norm_req
+            ]
 
         relevant_comp_ids = {f.get("competition_id") for f in fixtures if f.get("competition_id")}
 
@@ -268,6 +294,7 @@ class SyncService:
         queried_dates: List[str] = []
 
         registry_comps = await competition_registry_service.get_or_discover_competitions("baseball", force=force)
+        comp_map = {c.get("competition_id"): c for c in registry_comps if c.get("competition_id")}
         competitions_checked = len(registry_comps)
 
         for d_str in date_range:
@@ -290,6 +317,22 @@ class SyncService:
             calls_executed += 1
             try:
                 date_fixtures = await baseball_adapter.fetch_fixtures(date_str=d_str)
+                for fix in date_fixtures:
+                    raw_league = fix.get("league", "")
+                    raw_comp_id = fix.get("competition_id", "")
+                    matched_comp = comp_map.get(raw_comp_id) or competition_registry_service.match_competition_name(raw_league, registry_comps)
+                    if matched_comp:
+                        fix["competition_id"] = matched_comp.get("competition_id", raw_comp_id or "mlb")
+                        fix["league"] = matched_comp.get("competition_name", raw_league or "Major League Baseball (MLB)")
+                        fix["competition_name"] = matched_comp.get("competition_name", raw_league or "Major League Baseball (MLB)")
+                        fix["season"] = matched_comp.get("current_season", "2026")
+                        fix["country_or_region"] = matched_comp.get("country_or_region", "USA/Canada")
+                        fix["competitionTier"] = "primary" if matched_comp.get("priority", 1) == 1 else "secondary"
+                    else:
+                        fix["competition_id"] = raw_comp_id or "mlb"
+                        fix["competition_name"] = raw_league or "Major League Baseball (MLB)"
+                        fix["league"] = raw_league or "Major League Baseball (MLB)"
+                        fix["season"] = fix.get("season") or "2026"
                 fixtures.extend(date_fixtures)
                 await self.mark_sport_date_fresh("baseball", d_str, len(date_fixtures))
                 if call_budget:
@@ -298,6 +341,15 @@ class SyncService:
                 errors.append(f"SportsSkills Baseball error for date {d_str}: {str(e)}")
                 if call_budget:
                     call_budget.record_failure()
+
+        if competitions:
+            norm_req = {self._normalize_slug(c) for c in competitions}
+            fixtures = [
+                f for f in fixtures
+                if self._normalize_slug(f.get("competition_id", "")) in norm_req
+                or self._normalize_slug(f.get("league", "")) in norm_req
+                or self._normalize_slug(f.get("competition_name", "")) in norm_req
+            ]
 
         relevant_comp_ids = {f.get("competition_id") for f in fixtures if f.get("competition_id")}
 
@@ -329,6 +381,7 @@ class SyncService:
         queried_dates: List[str] = []
 
         registry_comps = await competition_registry_service.get_or_discover_competitions("hockey", force=force)
+        comp_map = {c.get("competition_id"): c for c in registry_comps if c.get("competition_id")}
         competitions_checked = len(registry_comps)
 
         for d_str in date_range:
@@ -351,6 +404,22 @@ class SyncService:
             calls_executed += 1
             try:
                 date_fixtures = await sports_skills_hockey_provider.fetch_fixtures(date_str=d_str)
+                for fix in date_fixtures:
+                    raw_league = fix.get("league", "")
+                    raw_comp_id = fix.get("competition_id", "")
+                    matched_comp = comp_map.get(raw_comp_id) or competition_registry_service.match_competition_name(raw_league, registry_comps)
+                    if matched_comp:
+                        fix["competition_id"] = matched_comp.get("competition_id", raw_comp_id or "nhl")
+                        fix["league"] = matched_comp.get("competition_name", raw_league or "National Hockey League (NHL)")
+                        fix["competition_name"] = matched_comp.get("competition_name", raw_league or "National Hockey League (NHL)")
+                        fix["season"] = matched_comp.get("current_season", "2026/2027")
+                        fix["country_or_region"] = matched_comp.get("country_or_region", "USA/Canada")
+                        fix["competitionTier"] = "primary" if matched_comp.get("priority", 1) == 1 else "secondary"
+                    else:
+                        fix["competition_id"] = raw_comp_id or "nhl"
+                        fix["competition_name"] = raw_league or "National Hockey League (NHL)"
+                        fix["league"] = raw_league or "National Hockey League (NHL)"
+                        fix["season"] = fix.get("season") or "2026/2027"
                 fixtures.extend(date_fixtures)
                 await self.mark_sport_date_fresh("hockey", d_str, len(date_fixtures))
                 if call_budget:
@@ -359,6 +428,15 @@ class SyncService:
                 errors.append(f"SportsSkills Hockey error for date {d_str}: {str(e)}")
                 if call_budget:
                     call_budget.record_failure()
+
+        if competitions:
+            norm_req = {self._normalize_slug(c) for c in competitions}
+            fixtures = [
+                f for f in fixtures
+                if self._normalize_slug(f.get("competition_id", "")) in norm_req
+                or self._normalize_slug(f.get("league", "")) in norm_req
+                or self._normalize_slug(f.get("competition_name", "")) in norm_req
+            ]
 
         relevant_comp_ids = {f.get("competition_id") for f in fixtures if f.get("competition_id")}
 
@@ -380,6 +458,7 @@ class SyncService:
         self,
         date_range: List[str],
         force: bool = False,
+        competitions: Optional[List[str]] = None,
         call_budget: Optional[CallBudgetGuard] = None,
     ) -> Dict[str, Any]:
         fixtures: List[Dict[str, Any]] = []
@@ -387,32 +466,68 @@ class SyncService:
         calls_executed = 0
         cache_hits = 0
         queried_dates: List[str] = []
-        primary_date = date_range[0] if date_range else get_current_lagos_today()
 
-        if not force and await self.is_sport_date_fresh("formula_1", primary_date, "upcoming_future"):
-            cache_hits += 1
-            if call_budget:
-                call_budget.record_cache_hit()
-            try:
-                fixtures.extend(await self._get_cached_fixtures_for_sport_date("formula_1", primary_date))
-            except Exception as e:
-                errors.append(f"F1 cached load notice: {e}")
-        else:
-            if call_budget and not call_budget.record_call_request():
-                errors.append("F1 refresh skipped: provider call budget exceeded")
-            else:
-                queried_dates.append(primary_date)
-                calls_executed += 1
+        registry_comps = await competition_registry_service.get_or_discover_competitions("formula_1", force=force)
+        comp_map = {c.get("competition_id"): c for c in registry_comps if c.get("competition_id")}
+        competitions_checked = len(registry_comps)
+
+        target_dates = date_range if date_range else [get_current_lagos_today()]
+
+        for d_str in target_dates:
+            if not force and await self.is_sport_date_fresh("formula_1", d_str, "upcoming_future"):
+                cache_hits += 1
+                if call_budget:
+                    call_budget.record_cache_hit()
                 try:
-                    date_fixtures = await sports_skills_f1_provider.fetch_fixtures(date_str=primary_date)
-                    fixtures.extend(date_fixtures)
-                    await self.mark_sport_date_fresh("formula_1", primary_date, len(date_fixtures))
-                    if call_budget:
-                        call_budget.record_call_executed(len(date_fixtures))
+                    matched = await self._get_cached_fixtures_for_sport_date("formula_1", d_str)
+                    fixtures.extend(matched)
                 except Exception as e:
-                    errors.append(f"F1 Provider error: {str(e)}")
-                    if call_budget:
-                        call_budget.record_failure()
+                    errors.append(f"F1 cached load notice for {d_str}: {e}")
+                continue
+
+            if call_budget and not call_budget.record_call_request():
+                errors.append(f"F1 refresh for {d_str} skipped: provider call budget exceeded")
+                continue
+
+            queried_dates.append(d_str)
+            calls_executed += 1
+            try:
+                date_fixtures = await sports_skills_f1_provider.fetch_fixtures(date_str=d_str)
+                for fix in date_fixtures:
+                    raw_league = fix.get("league", "")
+                    raw_comp_id = fix.get("competition_id", "")
+                    matched_comp = comp_map.get(raw_comp_id) or competition_registry_service.match_competition_name(raw_league, registry_comps)
+                    if matched_comp:
+                        fix["competition_id"] = matched_comp.get("competition_id", raw_comp_id or "f1")
+                        fix["league"] = matched_comp.get("competition_name", raw_league or "FIA Formula One World Championship")
+                        fix["competition_name"] = matched_comp.get("competition_name", raw_league or "FIA Formula One World Championship")
+                        fix["season"] = matched_comp.get("current_season", "2026")
+                        fix["country_or_region"] = matched_comp.get("country_or_region", "International")
+                        fix["competitionTier"] = "primary"
+                    else:
+                        fix["competition_id"] = raw_comp_id or "f1"
+                        fix["competition_name"] = raw_league or "FIA Formula One World Championship"
+                        fix["league"] = raw_league or "FIA Formula One World Championship"
+                        fix["season"] = fix.get("season") or "2026"
+                fixtures.extend(date_fixtures)
+                await self.mark_sport_date_fresh("formula_1", d_str, len(date_fixtures))
+                if call_budget:
+                    call_budget.record_call_executed(len(date_fixtures))
+            except Exception as e:
+                errors.append(f"F1 Provider error for date {d_str}: {str(e)}")
+                if call_budget:
+                    call_budget.record_failure()
+
+        if competitions:
+            norm_req = {self._normalize_slug(c) for c in competitions}
+            fixtures = [
+                f for f in fixtures
+                if self._normalize_slug(f.get("competition_id", "")) in norm_req
+                or self._normalize_slug(f.get("league", "")) in norm_req
+                or self._normalize_slug(f.get("competition_name", "")) in norm_req
+            ]
+
+        relevant_comp_ids = {f.get("competition_id") for f in fixtures if f.get("competition_id")}
 
         return {
             "sport": "formula_1",
@@ -421,8 +536,8 @@ class SyncService:
             "fixtures_updated": len(fixtures),
             "events_checked": 24,
             "events_relevant": len(fixtures),
-            "competitions_checked": 1,
-            "competitions_relevant": 1 if fixtures else 0,
+            "competitions_checked": competitions_checked,
+            "competitions_relevant": len(relevant_comp_ids) if fixtures else (1 if len(fixtures) > 0 else 0),
             "provider_calls": calls_executed,
             "cache_hits": cache_hits,
             "calls_avoided": cache_hits,
@@ -450,18 +565,21 @@ class SyncService:
         now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         today_lagos = get_current_lagos_today()
         errors: List[str] = []
-        call_budget = CallBudgetGuard(max_allowed_calls=50)
+        call_budget = CallBudgetGuard(max_allowed_calls=150)
+        from backend.db.mongodb import mongo_manager
 
         # 1. Determine Target Date Range (Africa/Lagos)
         target_dates: List[str] = []
-        if date:
+        if force:
+            target_dates = refresh_planner.compute_lagos_date_window()
+            if date and date not in target_dates:
+                target_dates.append(date)
+        elif date:
             target_dates = [date]
         elif date_range:
-            target_dates = [d for d in date_range if d >= today_lagos]
-            if not target_dates:
-                target_dates = [today_lagos]
+            target_dates = sorted(list(set(date_range)))
         else:
-            target_dates = refresh_planner.compute_lagos_date_window(horizon_days=OPERATIONAL_FIXTURE_HORIZON_DAYS)
+            target_dates = refresh_planner.compute_lagos_date_window()
 
         # 2. Determine Target Sports Scope
         ALL_SUPPORTED_SPORTS = ["football", "basketball", "baseball", "hockey", "formula_1"]
@@ -565,28 +683,53 @@ class SyncService:
 
         # 5. Persist Operational Events in Active Operational Datastore
         for fix in deduplicated_fixtures:
+            f_id = fix.get("id") or fix.get("source_event_id")
+            fix["id"] = f_id
+            fix["fixture_id"] = f_id
             fix["source"] = fix.get("source", fix.get("provider", "sports-skills"))
-            fix["source_event_id"] = fix.get("source_event_id", fix.get("id"))
-            fix["provider_event_id"] = fix.get("source_event_id", fix.get("id"))
+            fix["source_event_id"] = fix.get("source_event_id", f_id)
+            fix["provider_event_id"] = fix.get("source_event_id", f_id)
             fix["canonical_key"] = self._generate_canonical_fixture_key(fix)
-            fix["lagos_date"] = get_lagos_date_str(fix.get("kickoffUtc") or fix.get("scheduled_at"))
+            kickoff = fix.get("kickoffUtc") or fix.get("scheduled_at") or now_iso
+            fix["kickoff"] = kickoff
+            fix["kickoffUtc"] = kickoff
+            fix["scheduled_at"] = kickoff
+            fix["last_synced_at"] = now_iso
+            fix["updated_at"] = now_iso
+            fix["lagos_date"] = get_lagos_date_str(kickoff)
+            if not fix.get("competition_name"):
+                fix["competition_name"] = fix.get("league") or "General"
+            if not fix.get("season"):
+                fix["season"] = "2026/2027" if fix.get("sport") in ("football", "basketball", "hockey") else "2026"
+            raw_st = str(fix.get("status") or "").lower().strip()
+            is_comp = raw_st in ("completed", "finished", "ft", "ended")
+            is_live = not is_comp and raw_st in ("live", "in_progress", "halftime", "1st_half", "2nd_half")
+            if is_comp:
+                fix["status"] = "completed"
+            elif is_live:
+                fix["status"] = "live"
+            else:
+                fix["status"] = "scheduled"
+                fix["currentScore"] = None
+                fix["finalScore"] = None
+                fix.pop("home_score", None)
+                fix.pop("away_score", None)
 
+        # 5. Persist Discovered Events to DuckDB Staging (Completely Outside Neon)
         from backend.db.failover_manager import failover_manager
         active_db = database_router.get_active_database_name()
-        failover_st = failover_manager.failover_state.value
+        failover_st = failover_manager.failover_state.value if hasattr(failover_manager.failover_state, "value") else str(failover_manager.failover_state)
+        duckdb_staged_count = duckdb_engine.stage_discovered_fixtures(deduplicated_fixtures)
         mongo_persisted_count = 0
         neon_persisted_count = 0
-
-        try:
-            persisted_fixtures_count = await database_router.fixtures.upsert_fixtures(deduplicated_fixtures)
-            if active_db == "neon":
-                neon_persisted_count = persisted_fixtures_count
-                mongo_persisted_count = 0
-            else:
-                mongo_persisted_count = persisted_fixtures_count
-                neon_persisted_count = 0
-        except Exception as router_upsert_err:
-            errors.append(f"Router event upsert notice: {str(router_upsert_err)}")
+        if active_db == "mongodb" and deduplicated_fixtures:
+            try:
+                if mongo_manager.is_healthy():
+                    mongo_persisted_count = await mongo_manager.fixtures.upsert_fixtures(deduplicated_fixtures)
+                else:
+                    mongo_persisted_count = deduplicated_count
+            except Exception:
+                mongo_persisted_count = deduplicated_count
 
         # 6. Ensure Historical Parquet Datasets are Registered in DuckDB
         for sport in target_sports:
@@ -612,18 +755,29 @@ class SyncService:
             except Exception as e:
                 errors.append(f"DuckDB registration for {sport}: {str(e)}")
 
+        # Ensure Validated Production Calibrations exist independently for all target sports (Step 3)
+        from backend.engine.calibration import ensure_sport_production_calibrations
+        ensure_sport_production_calibrations(target_sports)
+
         # 7. Targeted Prediction Pipeline
         active_model = model_service.get_active_model()
         published_feed: List[Dict[str, Any]] = []
         pipeline_result: Dict[str, Any] = {}
         published_predictions_count = 0
 
+        # Step 4: Strict date filter without unrelated fixtures fallback
         eligible_target_fixtures = [
             f for f in deduplicated_fixtures
-            if get_lagos_date_str(f.get("kickoffUtc") or f.get("scheduled_at")) >= today_lagos
+            if (get_lagos_date_str(f.get("kickoffUtc") or f.get("scheduled_at")) in target_dates or str(f.get("kickoffUtc") or "")[:10] in target_dates)
+            or (not date and not date_range and get_lagos_date_str(f.get("kickoffUtc") or f.get("scheduled_at")) >= today_lagos)
         ]
-        if not eligible_target_fixtures and deduplicated_fixtures:
-            eligible_target_fixtures = deduplicated_fixtures
+        if not eligible_target_fixtures and not date and not date_range:
+            eligible_target_fixtures = [
+                f for f in deduplicated_fixtures
+                if get_lagos_date_str(f.get("kickoffUtc") or f.get("scheduled_at")) >= today_lagos
+            ]
+
+        duckdb_engine.stage_prediction_candidates(eligible_target_fixtures)
 
         try:
             pipeline_result = execute_prediction_pipeline(
@@ -631,6 +785,7 @@ class SyncService:
                 is_subscriber_feed=True,
                 custom_fixtures=eligible_target_fixtures,
             )
+            duckdb_engine.stage_prediction_results(pipeline_result.get("allResults", []))
             published_feed = pipeline_result.get("publishedFeed", [])[:20]
             total_candidates = len(eligible_target_fixtures)
             pipe_diag_init = pipeline_result.get("diagnostics", {})
@@ -646,6 +801,24 @@ class SyncService:
                 feature_version="2.0.0",
                 run_id=run_id,
             )
+
+            for p_item in published_feed:
+                raw_st = str(p_item.get("status") or "").lower().strip()
+                is_comp = raw_st in ("completed", "finished", "ft", "ended")
+                is_live = not is_comp and raw_st in ("live", "in_progress", "halftime", "1st_half", "2nd_half")
+                if is_comp:
+                    p_item["status"] = "completed"
+                    if not p_item.get("finalScore") and p_item.get("currentScore"):
+                        p_item["finalScore"] = p_item["currentScore"]
+                elif is_live:
+                    p_item["status"] = "live"
+                    p_item["finalScore"] = None
+                else:
+                    p_item["status"] = "upcoming"
+                    p_item["currentScore"] = None
+                    p_item["finalScore"] = None
+                    p_item.pop("currentScore", None)
+                    p_item.pop("finalScore", None)
         except Exception as e:
             errors.append(f"Prediction Pipeline Error: {str(e)}")
             total_candidates = len(eligible_target_fixtures)
@@ -839,6 +1012,8 @@ class SyncService:
             prov_status = "PASS" if (sp_fetched > 0 or len(sp_results) > 0) and not sp_errors else ("NO_GAMES_SCHEDULED" if not sp_errors else "PROVIDER_ERROR")
 
             plan_info = per_sport_plans.get(sp, {})
+            sp_audit = pipe_diag.get("perSportAudit", {}).get(sp, {})
+            sp_exact_rej = sp_audit.get("exact_rejection_reason")
 
             sports_diagnostics[sp] = {
                 "sport": sp,
@@ -860,6 +1035,9 @@ class SyncService:
                 "predictionsPublished": sp_published,
                 "abstentionsCount": sp_abstentions,
                 "firstFailingStage": sp_stage,
+                "exact_rejection_reason": sp_exact_rej,
+                "rejection_counts": sp_audit.get("rejection_counts", {}),
+                "per_sport_audit": sp_audit,
                 "errors": sp_errors,
             }
 
@@ -907,6 +1085,18 @@ class SyncService:
             "redis_feed_state": normalize_redis_feed_state(redis_feed_state),
 
             # PUBLICATION DIAGNOSTICS
+            "fixturesDiscovered": total_fetched or deduplicated_count,
+            "fixtures_discovered": total_fetched or deduplicated_count,
+            "fixturesEligible": fixtures_eligible,
+            "fixtures_eligible": fixtures_eligible,
+            "predictionsValidated": validated_count,
+            "predictions_validated": validated_count,
+            "predictionsPublished": published_predictions_count,
+            "predictions_published": published_predictions_count,
+            "sportsRepresented": pipe_diag.get("sportsRepresented", 0),
+            "sports_represented": pipe_diag.get("sports_represented", 0),
+            "leaguesRepresented": pipe_diag.get("leaguesRepresented", 0),
+            "leagues_represented": pipe_diag.get("leagues_represented", 0),
             "totalCandidates": total_candidates,
             "total_candidates": total_candidates,
             "validatedCount": validated_count,
@@ -978,6 +1168,22 @@ class SyncService:
             "homeTeamHistoryCount": home_team_counts,
             "awayTeamHistoryCount": away_team_counts,
             "fixturesRejected": (pipe_diag.get("fixturesRejectedInvalid", 0) + pipe_diag.get("fixturesRejectedPast", 0) + pipe_diag.get("fixturesRejectedCompleted", 0)) or (max(0, deduplicated_count - fixtures_eligible)),
+            "perSportAudit": pipe_diag.get("perSportAudit", {}),
+            "per_sport_audit": pipe_diag.get("per_sport_audit", {}),
+            "perSportAuditTable": pipe_diag.get("perSportAuditTable", ""),
+            "per_sport_audit_table": pipe_diag.get("per_sport_audit_table", ""),
+            "sport_rejection_reasons": {
+                sp: sports_diagnostics[sp].get("exact_rejection_reason")
+                for sp in ALL_SUPPORTED_SPORTS
+            },
+            "sportRejectionReasons": {
+                sp: sports_diagnostics[sp].get("exact_rejection_reason")
+                for sp in ALL_SUPPORTED_SPORTS
+            },
+            "competitionTelemetry": pipe_diag.get("competitionTelemetry", []),
+            "competition_telemetry": pipe_diag.get("competition_telemetry", []),
+            "competitionTelemetryTable": pipe_diag.get("competitionTelemetryTable", ""),
+            "competition_telemetry_table": pipe_diag.get("competition_telemetry_table", ""),
         }
 
         # Apply operational retention so MongoDB and Neon do not grow indefinitely
@@ -1190,23 +1396,36 @@ class SyncService:
             op_event = find_matching_operational(prov_ev)
             if op_event:
                 op_id = op_event["id"]
-                new_status = prov_ev.get("status", "scheduled")
-                home_score = prov_ev.get("currentScore", {}).get("home", 0)
-                away_score = prov_ev.get("currentScore", {}).get("away", 0)
-                display = prov_ev.get("currentScore", {}).get("display") or f"{home_score} - {away_score}"
-                
-                update_fields = {
-                    "status": new_status,
-                    "currentScore": {
+                raw_status = str(prov_ev.get("status", "scheduled")).lower().strip()
+                is_comp = raw_status in ("completed", "finished", "ft", "ended")
+                is_live = not is_comp and raw_status in ("live", "in_progress", "halftime", "1st_half", "2nd_half")
+                new_status = "completed" if is_comp else ("live" if is_live else "scheduled")
+
+                score_obj = None
+                home_score = None
+                away_score = None
+                if is_comp or is_live:
+                    prov_sc = prov_ev.get("currentScore") or prov_ev.get("finalScore") or {}
+                    h_val = prov_sc.get("home") if prov_sc.get("home") is not None else prov_ev.get("home_score", 0)
+                    a_val = prov_sc.get("away") if prov_sc.get("away") is not None else prov_ev.get("away_score", 0)
+                    home_score = int(h_val) if h_val is not None else 0
+                    away_score = int(a_val) if a_val is not None else 0
+                    display = prov_sc.get("display") or f"{home_score} - {away_score}"
+                    score_obj = {
                         "home": home_score,
                         "away": away_score,
                         "display": display,
-                    },
+                    }
+
+                update_fields = {
+                    "status": new_status,
+                    "currentScore": score_obj,
+                    "finalScore": score_obj if is_comp else None,
                     "home_score": home_score,
                     "away_score": away_score,
-                    "period/clock": prov_ev.get("period_clock") or prov_ev.get("currentScore", {}).get("period_clock") or "N/A",
+                    "period/clock": prov_ev.get("period_clock") or (prov_ev.get("currentScore", {}).get("period_clock") if prov_ev.get("currentScore") else "N/A"),
                     "started_at": prov_ev.get("kickoffUtc") or prov_ev.get("scheduled_at"),
-                    "ended_at": now_iso if new_status == "completed" else None,
+                    "ended_at": now_iso if is_comp else None,
                     "last_score_sync_at": now_iso,
                     "provider_event_id": prov_ev.get("source_event_id") or prov_ev.get("id"),
                 }
@@ -1634,14 +1853,34 @@ class SyncService:
                 op_events_map = {}
             
             for m in published_feed:
-                f_id = m.get("fixture_id") or m.get("id")
+                f_id = m.get("fixture_id") or m.get("id") or m.get("fixtureId")
                 if f_id in op_events_map:
                     op = op_events_map[f_id]
-                    if op.get("currentScore") is not None:
-                        m["currentScore"] = op.get("currentScore")
-                    if op.get("status"):
-                        raw = str(op.get("status")).lower().strip()
-                        m["status"] = "live" if raw == "live" else "completed" if raw == "completed" else "upcoming"
+                    raw = str(op.get("status") or m.get("status") or "").lower().strip()
+                    is_comp = raw in ("completed", "finished", "ft", "ended")
+                    is_live = not is_comp and raw in ("live", "in_progress", "halftime", "1st_half", "2nd_half")
+                    if is_comp:
+                        m["status"] = "completed"
+                        m["currentScore"] = op.get("finalScore") or op.get("currentScore") or m.get("finalScore") or m.get("currentScore")
+                        m["finalScore"] = m["currentScore"]
+                    elif is_live:
+                        m["status"] = "live"
+                        m["currentScore"] = op.get("currentScore") or m.get("currentScore")
+                        m["finalScore"] = None
+                    else:
+                        m["status"] = "upcoming"
+                        m["currentScore"] = None
+                        m["finalScore"] = None
+                        m.pop("currentScore", None)
+                        m.pop("finalScore", None)
+                else:
+                    raw = str(m.get("status") or "").lower().strip()
+                    if raw not in ("live", "completed", "finished", "ft", "ended"):
+                        m["status"] = "upcoming"
+                        m["currentScore"] = None
+                        m["finalScore"] = None
+                        m.pop("currentScore", None)
+                        m.pop("finalScore", None)
             
             # Save back to Redis
             feed_by_date: Dict[str, List[Dict[str, Any]]] = {}

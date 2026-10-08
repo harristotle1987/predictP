@@ -29,9 +29,15 @@ export const MatchDetailsView: React.FC<MatchDetailsViewProps> = ({ fixture, onB
       ? 'Ice Hockey'
       : 'Formula 1';
 
-  const isCompleted = fixture.status === 'completed';
-  const isLive = fixture.status === 'live';
-  const isUpcoming = fixture.status === 'upcoming';
+  // Strict status determination: upcoming fixtures must never be marked live or completed
+  const kickoffMs = fixture.kickoffUtc ? new Date(fixture.kickoffUtc).getTime() : 0;
+  const nowMs = Date.now();
+  const isFutureKickoff = kickoffMs > nowMs + 5 * 60 * 1000;
+
+  const rawStatus = String(fixture.status || '').toLowerCase().trim();
+  const isCompleted = rawStatus === 'completed' || rawStatus === 'finished' || rawStatus === 'ft' || rawStatus === 'ended' || rawStatus === 'final';
+  const isLive = !isCompleted && !isFutureKickoff && (rawStatus === 'live' || rawStatus === 'in_progress' || rawStatus === 'halftime' || rawStatus === '1st_half' || rawStatus === '2nd_half');
+  const isUpcoming = !isLive && !isCompleted;
   const pred = fixture.highestPercentagePrediction;
 
   // Evaluate if outcome hit for completed matches
@@ -293,15 +299,15 @@ export const MatchDetailsView: React.FC<MatchDetailsViewProps> = ({ fixture, onB
 
             {/* Center Score / State (Dominates completed/live matches) */}
             <div className="sm:col-span-1 flex flex-col items-center justify-center">
-              {isLive && fixture.currentScore && (
+              {isLive && fixture.currentScore && typeof fixture.currentScore.home === 'number' && (
                 <div className="rounded border border-amber-600/40 bg-zinc-900 px-4 py-1.5 font-mono text-2xl font-bold text-amber-300 tabular-nums">
                   {fixture.currentScore.home} - {fixture.currentScore.away}
                 </div>
               )}
 
-              {isCompleted && fixture.finalScore && (
+              {isCompleted && (fixture.finalScore || fixture.currentScore) && typeof (fixture.finalScore?.home ?? fixture.currentScore?.home) === 'number' && (
                 <div className="rounded border border-zinc-700 bg-zinc-900/80 px-4 py-1.5 font-mono text-2xl font-bold text-white tabular-nums">
-                  {fixture.finalScore.home} - {fixture.finalScore.away}
+                  {fixture.finalScore?.home ?? fixture.currentScore?.home} - {fixture.finalScore?.away ?? fixture.currentScore?.away}
                 </div>
               )}
 

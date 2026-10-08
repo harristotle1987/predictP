@@ -5,6 +5,7 @@ import { SkeletonCard } from '../common/SkeletonCard';
 import { FixtureCard } from './FixtureCard';
 import { PredictionCalendar } from '../common/PredictionCalendar';
 import { getLagosTodayYmd, formatLagosDateDisplay } from '../../utils/timezone';
+import { sanitizeFixtureScores } from '../../utils/sanitizeScores';
 import { apiService } from '../../services/api';
 import {
   Calendar,
@@ -97,6 +98,36 @@ export const HomeView: React.FC<HomeViewProps> = ({
 
   const [isManualRefreshing, setIsManualRefreshing] = useState<boolean>(false);
   const [emptyNotice, setEmptyNotice] = useState<string | null>(null);
+  const [pipelineSummary, setPipelineSummary] = useState<{
+    fixturesDiscovered: number;
+    fixturesEligible: number;
+    predictionsValidated: number;
+    predictionsPublished: number;
+    sportsRepresented: number;
+    leaguesRepresented: number;
+    perSport: Array<{
+      sport: string;
+      discovered: number;
+      eligible: number;
+      published: number;
+      rejection_reason: string;
+    }>;
+  } | null>(null);
+
+  const loadSummary = useCallback(async () => {
+    try {
+      const res = await apiService.fetchPredictionSummary();
+      if (res?.data) {
+        setPipelineSummary(res.data);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    loadSummary();
+  }, [loadSummary]);
 
   // Fetch predictions for the selected date strictly reading pre-computed feed
   const fetchForDate = useCallback(async (dateYmd: string, isWarmupRetry = false) => {
@@ -127,7 +158,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
         setDateFixtures([]);
       } else {
         const items = res.data || [];
-        setDateFixtures(items);
+        setDateFixtures(sanitizeFixtureScores(items));
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Prediction feed request failed';
@@ -147,10 +178,9 @@ export const HomeView: React.FC<HomeViewProps> = ({
     setFeedError(null);
     setEmptyNotice(null);
     try {
-      // 1. POST /api/admin/refresh
+      // 1. POST /api/admin/refresh (force full multi-sport pipeline refresh)
       const refreshRes = await apiService.triggerRefresh({
         force: true,
-        date: selectedDate,
       });
 
       const publishedCount =
@@ -162,18 +192,20 @@ export const HomeView: React.FC<HomeViewProps> = ({
       // 2. GET /api/predictions/feed?date=YYYY-MM-DD
       const feedRes = await apiService.fetchPublishedPredictions({ date: selectedDate });
       const items = feedRes.data || [];
-      setDateFixtures(items);
+      setDateFixtures(sanitizeFixtureScores(items));
 
       if (publishedCount === 0 || items.length === 0) {
         setEmptyNotice('No published predictions were generated for this date.');
       }
-    } catch (err: any) {
+      await loadSummary();
+    } catch {
       const feedRes = await apiService.fetchPublishedPredictions({ date: selectedDate });
       const items = feedRes.data || [];
-      setDateFixtures(items);
+      setDateFixtures(sanitizeFixtureScores(items));
       if (items.length === 0) {
         setEmptyNotice('No published predictions were generated for this date.');
       }
+      await loadSummary();
     } finally {
       setIsManualRefreshing(false);
     }
@@ -253,39 +285,86 @@ export const HomeView: React.FC<HomeViewProps> = ({
         </div>
       </div>
 
-      {/* 2. Metrics KPI Row */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 font-mono">
-        <div className="rounded-lg border border-zinc-800 bg-[#0d131f] p-3">
-          <div className="text-[10px] uppercase tracking-wider text-zinc-400">Published Predictions</div>
-          <div className="mt-1 flex items-baseline justify-between">
-            <span className="text-xl font-bold text-white tabular-nums">{filteredFixtures.length}</span>
-            <span className="text-[11px] text-zinc-500">Max 20</span>
+      {/* 2. Pipeline Discovery & Validation Diagnostics */}
+      <div className="rounded-xl border border-zinc-800 bg-[#0d131f] p-4 space-y-3 font-mono">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800/80 pb-2.5">
+          <div className="flex items-center gap-2">
+            <span className="flex h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="text-xs font-bold uppercase tracking-wider text-zinc-200">
+              Pipeline Verification & Discovery Diagnostics
+            </span>
+          </div>
+          <span className="text-[11px] text-zinc-500">
+            Real provider catalogue · Validation gates strictly enforced
+          </span>
+        </div>
+
+        {/* The 6 required UI diagnostic metrics */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+          <div className="rounded-lg bg-zinc-900/70 border border-zinc-800/80 p-2.5">
+            <div className="text-[10px] uppercase text-zinc-400">Fixtures discovered</div>
+            <div className="text-lg font-bold text-cyan-400 mt-0.5 tabular-nums">
+              {pipelineSummary ? pipelineSummary.fixturesDiscovered : '—'}
+            </div>
+          </div>
+          <div className="rounded-lg bg-zinc-900/70 border border-zinc-800/80 p-2.5">
+            <div className="text-[10px] uppercase text-zinc-400">Fixtures eligible</div>
+            <div className="text-lg font-bold text-amber-400 mt-0.5 tabular-nums">
+              {pipelineSummary ? pipelineSummary.fixturesEligible : '—'}
+            </div>
+          </div>
+          <div className="rounded-lg bg-zinc-900/70 border border-zinc-800/80 p-2.5">
+            <div className="text-[10px] uppercase text-zinc-400">Predictions validated</div>
+            <div className="text-lg font-bold text-indigo-400 mt-0.5 tabular-nums">
+              {pipelineSummary ? pipelineSummary.predictionsValidated : '—'}
+            </div>
+          </div>
+          <div className="rounded-lg bg-zinc-900/70 border border-zinc-800/80 p-2.5">
+            <div className="text-[10px] uppercase text-zinc-400">Predictions published</div>
+            <div className="text-lg font-bold text-emerald-400 mt-0.5 tabular-nums">
+              {pipelineSummary ? pipelineSummary.predictionsPublished : filteredFixtures.length}
+            </div>
+          </div>
+          <div className="rounded-lg bg-zinc-900/70 border border-zinc-800/80 p-2.5">
+            <div className="text-[10px] uppercase text-zinc-400">Sports represented</div>
+            <div className="text-lg font-bold text-purple-400 mt-0.5 tabular-nums">
+              {pipelineSummary ? pipelineSummary.sportsRepresented : (selectedSport === 'all' ? 5 : 1)}
+            </div>
+          </div>
+          <div className="rounded-lg bg-zinc-900/70 border border-zinc-800/80 p-2.5">
+            <div className="text-[10px] uppercase text-zinc-400">Leagues represented</div>
+            <div className="text-lg font-bold text-zinc-200 mt-0.5 tabular-nums">
+              {pipelineSummary ? pipelineSummary.leaguesRepresented : availableLeagues.length}
+            </div>
           </div>
         </div>
 
-        <div className="rounded-lg border border-zinc-800 bg-[#0d131f] p-3">
-          <div className="text-[10px] uppercase tracking-wider text-zinc-400">Live In-Progress</div>
-          <div className="mt-1 flex items-baseline justify-between">
-            <span className="text-xl font-bold text-amber-400 tabular-nums">{liveFixtures.length}</span>
-            <span className="text-[11px] text-zinc-500">Live Scores</span>
+        {/* Per-Sport Audit & Rejection Transparency Breakdown */}
+        {pipelineSummary?.perSport && pipelineSummary.perSport.length > 0 && (
+          <div className="pt-2 border-t border-zinc-800/60">
+            <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1.5">
+              Per-Sport Pipeline Breakdown (Anti-Monopoly & Rejection Audit)
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {pipelineSummary.perSport.map((sp) => (
+                <div
+                  key={sp.sport}
+                  className="rounded bg-zinc-950/70 border border-zinc-800 px-2.5 py-1 text-xs flex items-center gap-2"
+                >
+                  <span className="font-semibold capitalize text-emerald-400">{sp.sport.replace('_', ' ')}:</span>
+                  <span className="text-cyan-400">{sp.discovered} discovered</span>
+                  <span className="text-zinc-600">·</span>
+                  <span className="text-amber-400">{sp.eligible} eligible</span>
+                  <span className="text-zinc-600">·</span>
+                  <span className="text-emerald-400">{sp.published} published</span>
+                  {sp.published === 0 && sp.rejection_reason && sp.rejection_reason !== 'NONE' && (
+                    <span className="text-rose-400/90 text-[10px]">({sp.rejection_reason.split(':')[0]})</span>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
-
-        <div className="rounded-lg border border-zinc-800 bg-[#0d131f] p-3">
-          <div className="text-[10px] uppercase tracking-wider text-zinc-400">Top Model Edge</div>
-          <div className="mt-1 flex items-baseline justify-between">
-            <span className="text-xl font-bold text-emerald-400 tabular-nums">{topEdge}</span>
-            <span className="text-[11px] text-zinc-500">Calibrated</span>
-          </div>
-        </div>
-
-        <div className="rounded-lg border border-zinc-800 bg-[#0d131f] p-3">
-          <div className="text-[10px] uppercase tracking-wider text-zinc-400">Active Leagues</div>
-          <div className="mt-1 flex items-baseline justify-between">
-            <span className="text-xl font-bold text-zinc-200 tabular-nums">{availableLeagues.length}</span>
-            <span className="text-[11px] text-zinc-500">Filtered</span>
-          </div>
-        </div>
+        )}
       </div>
 
       {/* 3. Date & Calendar Navigation Control Bar (Flexbox / Grid Layout) */}

@@ -533,6 +533,12 @@ class MongoPredictionRepository(IPredictionRepository):
         now_iso = datetime.now(timezone.utc).isoformat()
         count = 0
         for pred in predictions:
+            val_st = str(pred.get("validationStatus") or pred.get("validation_status") or "").lower().strip()
+            if val_st and val_st != "validated":
+                continue
+            if pred.get("published") is False:
+                continue
+
             p_id = pred.get("id")
             if not p_id:
                 continue

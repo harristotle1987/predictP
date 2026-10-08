@@ -8,6 +8,7 @@ import {
   ApiErrorInfo,
 } from '../types';
 import { isTodayOrFutureInLagos } from '../utils/timezone';
+import { sanitizeFixtureScores, sanitizeSingleFixture } from '../utils/sanitizeScores';
 
 export interface FixtureFilterParams {
   sport?: SportType | 'all';
@@ -185,7 +186,7 @@ class PredictProApiService {
         return { data: [] };
       }
 
-      return { data: rawList.slice(0, 20), count: rawList.length };
+      return { data: sanitizeFixtureScores(rawList.slice(0, 20)), count: rawList.length };
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Prediction feed request failed';
       return {
@@ -278,7 +279,7 @@ class PredictProApiService {
       const limit = typeof json.limit === 'number' ? json.limit : (params?.limit || 50);
 
       return {
-        data: Array.isArray(list) ? list : [],
+        data: Array.isArray(list) ? sanitizeFixtureScores(list) : [],
         total,
         page: currentPage,
         limit,
@@ -313,7 +314,8 @@ class PredictProApiService {
         return { data: null, error: `Fixture ${matchId} not found` };
       }
       const json = await safeJsonParse(res);
-      return { data: json };
+      const rawData = json && typeof json === 'object' && 'data' in json ? json.data : json;
+      return { data: rawData ? sanitizeSingleFixture(rawData) : null };
     } catch (error) {
       return { data: null, error: error instanceof Error ? error.message : 'Failed to load fixture detail' };
     }
@@ -375,7 +377,8 @@ class PredictProApiService {
         filtered = list.filter((f: ValidatedFixture) => isTodayOrFutureInLagos(f.kickoffUtc));
       }
 
-      return { data: filtered.slice(0, 20) };
+      const sanitized = sanitizeFixtureScores(filtered.slice(0, 20));
+      return { data: sanitized };
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Published predictions request failed';
       return {
@@ -522,6 +525,88 @@ class PredictProApiService {
   }
 
   /**
+   * Fetches prediction pipeline diagnostics summary:
+   * Fixtures discovered | Fixtures eligible | Predictions validated | Predictions published | Sports represented | Leagues represented
+   */
+  public async fetchPredictionSummary(): Promise<{
+    data: {
+      fixturesDiscovered: number;
+      fixturesEligible: number;
+      predictionsValidated: number;
+      predictionsPublished: number;
+      sportsRepresented: number;
+      leaguesRepresented: number;
+      perSport: Array<{
+        sport: string;
+        discovered: number;
+        eligible: number;
+        published: number;
+        rejection_reason: string;
+      }>;
+      runId?: string | null;
+      timestamp?: string | null;
+    } | null;
+    error?: string;
+  }> {
+    try {
+      const url = '/api/predictions/summary';
+      const res = await fetchWithRetry(url, {
+        headers: { Accept: 'application/json' },
+      });
+      if (!res.ok) {
+        return { data: null, error: `GET ${url} returned ${res.status}` };
+      }
+      const data = await safeJsonParse(res);
+      return { data };
+    } catch (error) {
+      return {
+        data: null,
+        error: error instanceof Error ? error.message : 'Prediction summary request failed',
+      };
+    }
+  }
+
+  /**
+   * Fetches cross-sport competition telemetry table and rows:
+   * Sport | Competition | Fixtures discovered | Eligible | Rejected | Published
+   */
+  public async fetchCompetitionTelemetry(): Promise<{
+    data: {
+      rows: Array<{
+        sport: string;
+        competition: string;
+        fixtures_discovered: number;
+        eligible: number;
+        rejected: number;
+        published: number;
+      }>;
+      table: string;
+    } | null;
+    error?: string;
+  }> {
+    try {
+      const url = '/api/telemetry/competitions';
+      const res = await fetchWithRetry(url, {
+        headers: { Accept: 'application/json' },
+      });
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        return {
+          data: null,
+          error: `GET ${url} failed: HTTP ${res.status} ${res.statusText}${body ? ` — ${body}` : ''}`,
+        };
+      }
+      const data = await safeJsonParse(res);
+      return { data };
+    } catch (error) {
+      return {
+        data: null,
+        error: error instanceof Error ? error.message : 'Competition telemetry request failed',
+      };
+    }
+  }
+
+  /**
    * Fetches backend services connection health
    */
   public async fetchBackendStatus(): Promise<BackendServiceStatus> {
@@ -660,6 +745,17 @@ class PredictProApiService {
         error: error instanceof Error ? error.message : 'Refresh request failed',
       };
     }
+  }
+
+  /**
+   * Alias for triggerAdminRefresh
+   */
+  public async triggerRefresh(
+    optionsOrKey?: { sports?: string[]; date?: string; date_range?: string[]; competitions?: string[]; force?: boolean } | string,
+    adminKeyOverride?: string
+  ): Promise<any> {
+    const res = await this.triggerAdminRefresh(optionsOrKey, adminKeyOverride);
+    return res.data || res;
   }
 
   /**

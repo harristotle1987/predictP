@@ -18,21 +18,20 @@ class TestOperationalHorizonAndCatalogueSeparation(unittest.IsolatedAsyncioTestC
         failover_manager.reset_state_for_tests()
 
     async def test_1_operational_fixture_horizon_days_constant(self):
-        """Verify OPERATIONAL_FIXTURE_HORIZON_DAYS is 7 in settings and services."""
-        self.assertEqual(OPERATIONAL_FIXTURE_HORIZON_DAYS, 7)
-        self.assertEqual(SYNC_HORIZON_DAYS, 7)
-        self.assertEqual(getattr(settings, "operational_fixture_horizon_days", 7), 7)
+        """Verify OPERATIONAL_FIXTURE_HORIZON_DAYS is at least 14 in settings and services."""
+        self.assertGreaterEqual(OPERATIONAL_FIXTURE_HORIZON_DAYS, 14)
+        self.assertGreaterEqual(SYNC_HORIZON_DAYS, 14)
 
     async def test_2_default_refresh_window_is_7_lagos_days(self):
-        """Verify default window is today + next 6 calendar days in Lagos (7 total)."""
+        """Verify default window uses operational horizon days in Lagos."""
         window = refresh_planner.compute_lagos_date_window()
-        self.assertEqual(len(window), 7)
+        self.assertEqual(len(window), OPERATIONAL_FIXTURE_HORIZON_DAYS)
 
         now_lagos = datetime.now(LAGOS_TZ)
         expected_today = now_lagos.strftime("%Y-%m-%d")
         self.assertEqual(window[0], expected_today)
 
-        for i in range(7):
+        for i in range(OPERATIONAL_FIXTURE_HORIZON_DAYS):
             expected_date = (now_lagos + timedelta(days=i)).strftime("%Y-%m-%d")
             self.assertEqual(window[i], expected_date)
 

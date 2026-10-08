@@ -331,7 +331,7 @@ export default function App() {
             fixtures={fixtures}
             isLoading={isLoading}
             onSelectFixture={handleSelectFixture}
-            onRefresh={() => loadData()}
+            onRefresh={() => handleTriggerRefreshPredictions()}
           />
         )}
 
@@ -346,7 +346,7 @@ export default function App() {
             goalItems={goalPredictions}
             isLoading={isLoading}
             onOpenFixture={handleOpenFixtureById}
-            onRefresh={() => loadData()}
+            onRefresh={() => handleTriggerRefreshPredictions()}
           />
         )}
 

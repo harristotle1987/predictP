@@ -1279,12 +1279,30 @@ class NeonPredictionRepository(IPredictionRepository):
                     doc["event_date_lagos"] = get_lagos_date_str(k_utc)
 
             # Map unified fixture status & score from single JOIN query
-            if r.get("fixture_status"):
-                raw_st = str(r["fixture_status"]).lower().strip()
-                doc["status"] = "live" if raw_st == "live" else ("completed" if raw_st == "completed" else "upcoming")
-            if r.get("current_score"):
-                sc = r["current_score"]
-                doc["currentScore"] = json.loads(sc) if isinstance(sc, str) else sc
+            raw_st = str(r.get("fixture_status") or doc.get("status") or "").lower().strip()
+            is_comp = raw_st in ("completed", "finished", "ft", "ended")
+            is_live = not is_comp and raw_st in ("live", "in_progress", "halftime", "1st_half", "2nd_half")
+            if is_comp:
+                doc["status"] = "completed"
+                sc = r.get("current_score") or doc.get("currentScore") or doc.get("finalScore")
+                if sc:
+                    parsed_sc = json.loads(sc) if isinstance(sc, str) else sc
+                    doc["currentScore"] = parsed_sc
+                    doc["finalScore"] = parsed_sc
+            elif is_live:
+                doc["status"] = "live"
+                sc = r.get("current_score") or doc.get("currentScore")
+                if sc:
+                    doc["currentScore"] = json.loads(sc) if isinstance(sc, str) else sc
+                doc["finalScore"] = None
+            else:
+                doc["status"] = "upcoming"
+                doc["currentScore"] = None
+                doc["finalScore"] = None
+                doc.pop("currentScore", None)
+                doc.pop("finalScore", None)
+                doc.pop("current_score", None)
+                doc.pop("final_score", None)
 
             enriched.append(doc)
         return enriched
@@ -1444,6 +1462,12 @@ class NeonPredictionRepository(IPredictionRepository):
         now_iso = datetime.now(timezone.utc).isoformat()
         prepared_params_seq: List[List[Any]] = []
         for p in predictions:
+            val_st = str(p.get("validationStatus") or p.get("validation_status") or "").lower().strip()
+            if val_st and val_st != "validated":
+                continue
+            if p.get("published") is False:
+                continue
+
             p_id = p.get("id") or p.get("fixture_id") or p.get("fixtureId")
             if not p_id:
                 continue
@@ -1455,7 +1479,7 @@ class NeonPredictionRepository(IPredictionRepository):
             if cal_pct is None and isinstance(p.get("highestPercentagePrediction"), dict):
                 cal_pct = p["highestPercentagePrediction"].get("percentage")
             if cal_pct is None:
-                cal_pct = 50.0
+                continue
 
             params = [
                 p_id,

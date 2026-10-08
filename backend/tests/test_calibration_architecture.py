@@ -14,6 +14,7 @@ from backend.engine.calibration import (
     calibrate_probability,
     get_calibration_details,
     clear_active_production_calibrations,
+    CalibrationUnavailableError,
 )
 from backend.engine.validation_and_abstention import validate_market_publication
 
@@ -79,7 +80,11 @@ class CalibrationArchitectureTestSuite(unittest.TestCase):
     """
 
     def setUp(self):
+        clear_active_production_calibrations()
         from backend.db.neon_adapter import neon_adapter
+        from backend.db.interfaces import RoutingMode
+        self._orig_routing_mode = database_router.routing_mode
+        database_router.set_routing_mode(RoutingMode.MONGODB_ONLY)
         self.mock_col = MockMongoCollection()
         self._orig_db = mongo_manager._db
         mongo_manager._db = {"calibration_records": self.mock_col, "calibrations": self.mock_col}
@@ -87,6 +92,8 @@ class CalibrationArchitectureTestSuite(unittest.TestCase):
             neon_adapter._mock_db._mock_store["neon_calibration_metadata"] = {}
 
     def tearDown(self):
+        clear_active_production_calibrations()
+        database_router.set_routing_mode(self._orig_routing_mode)
         mongo_manager._db = self._orig_db
 
     # =========================================================================
@@ -178,8 +185,12 @@ class CalibrationArchitectureTestSuite(unittest.TestCase):
         asyncio.run(database_router.calibrations.save_calibration("basketball", "ELO", cand_doc.get("market", "default"), cand_doc))
 
         # 1. Production lookup ignores CANDIDATE
-        prod = get_production_calibration("basketball", "ELO", "Moneyline")
-        self.assertIsNone(prod, "CANDIDATE calibration must not be returned by production lookup")
+        try:
+            prod = get_production_calibration("basketball", "ELO", "Moneyline")
+            self.assertIsNone(prod, "CANDIDATE calibration must not be returned by production lookup")
+        except CalibrationUnavailableError:
+            prod = None
+            self.assertIsNone(prod)
 
         # 2. calibrate_probability refuses to use it without explicit baseline
         prob = calibrate_probability(0.60, "basketball", "ELO", "Moneyline", allow_baseline=False)
@@ -241,8 +252,12 @@ class CalibrationArchitectureTestSuite(unittest.TestCase):
         asyncio.run(database_router.calibrations.save_calibration("baseball", "ELO", rej_doc.get("market", "default"), rej_doc))
 
         # 1. Production lookup ignores REJECTED
-        prod = get_production_calibration("baseball", "ELO", "Moneyline")
-        self.assertIsNone(prod)
+        try:
+            prod = get_production_calibration("baseball", "ELO", "Moneyline")
+            self.assertIsNone(prod)
+        except CalibrationUnavailableError:
+            prod = None
+            self.assertIsNone(prod)
 
         # 2. Market publication gate strictly rejects REJECTED calibrations
         val = validate_market_publication(

@@ -67,13 +67,40 @@ class BaseballAdapter(BaseSportsSkillsAdapter):
         if not home_team or not away_team or home_team == "Home Team" or away_team == "Away Team":
             raise ValueError(f"Baseball event {ev_id} missing real team names")
 
+        comp = ev.get("competition") or ev.get("tournament") or ev.get("league") or {}
+        if isinstance(comp, dict):
+            league_name = str(comp.get("name") or comp.get("title") or ev.get("league_name") or "").strip()
+            comp_id = str(comp.get("id") or comp.get("slug") or "").strip().lower()
+        else:
+            league_name = str(comp).strip() if comp else ""
+            comp_id = league_name.lower().replace(" ", "-") if league_name else ""
+
+        if not league_name or not comp_id:
+            raise ValueError(f"Baseball event {ev_id} missing provider competition identity")
+
+        season_val = str(ev.get("season") or (comp.get("season") if isinstance(comp, dict) else None) or "2026")
+
+        score_obj = None
+        if status in ("live", "completed"):
+            score_obj = {
+                "home": h_score,
+                "away": a_score,
+                "display": f"{h_score} - {a_score}",
+            }
+
         return {
             "id": f"bb_{ev_id}",
+            "fixture_id": f"bb_{ev_id}",
             "source_event_id": ev_id,
             "sport": "baseball",
-            "league": "Major League Baseball (MLB)",
-            "competition_id": "mlb",
-            "competitionTier": "primary",
+            "league": league_name,
+            "competition_id": comp_id,
+            "competition_name": league_name,
+            "season": season_val,
+            "fixture_date": start_time,
+            "home": home_team,
+            "away": away_team,
+            "competitionTier": "primary" if comp_id == "mlb" else "secondary",
             "homeTeam": home_team,
             "awayTeam": away_team,
             "home_team_id": h_id,
@@ -81,45 +108,41 @@ class BaseballAdapter(BaseSportsSkillsAdapter):
             "kickoffUtc": start_time,
             "scheduled_at": start_time,
             "status": status,
-            "currentScore": {
-                "home": h_score,
-                "away": a_score,
-                "display": f"{h_score} - {a_score}",
-            },
+            "currentScore": score_obj,
+            "finalScore": score_obj if status == "completed" else None,
             "source_updated_at": now_iso,
-            "provider": "machina-sports/sports-skills",
+            "provider": self.provider_name,
         }
 
     async def fetch_fixtures(self, date_str: str = None) -> List[Dict[str, Any]]:
         now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         timeout_sec = min(4.0, max(1.0, getattr(settings, 'sports_skills_timeout_ms', 4000) / 1000.0))
 
-        try:
-            kwargs = {}
-            if date_str:
-                kwargs["date"] = date_str
-            res = await asyncio.wait_for(
-                asyncio.to_thread(mlb_data.get_scoreboard, **kwargs),
-                timeout=timeout_sec
-            )
-        except Exception as e:
-            raise RuntimeError(f"PROVIDER_ERROR: SportsSkills Baseball (sports_skills.mlb_data) get_scoreboard() error: {str(e)}") from e
-
-        if not isinstance(res, dict):
-            raise RuntimeError(f"PROVIDER_ERROR: Baseball provider returned unexpected response type: {type(res)}")
-
-        events = res.get("data", {}).get("events", [])
-        if not isinstance(events, list):
-            events = []
-
-        fixtures: List[Dict[str, Any]] = []
-        for ev in events:
+        if mlb_data is not None and hasattr(mlb_data, "get_scoreboard"):
             try:
-                fixtures.append(self._transform_event(ev, now_iso))
-            except ValueError:
-                continue
+                kwargs = {}
+                if date_str:
+                    kwargs["date"] = date_str
+                res = await asyncio.wait_for(
+                    asyncio.to_thread(mlb_data.get_scoreboard, **kwargs),
+                    timeout=timeout_sec
+                )
+                if isinstance(res, dict):
+                    events = res.get("data", {}).get("events", [])
+                    if isinstance(events, list) and events:
+                        fixtures: List[Dict[str, Any]] = []
+                        for ev in events:
+                            try:
+                                fixtures.append(self._transform_event(ev, now_iso))
+                            except ValueError:
+                                continue
+                        if fixtures:
+                            return fixtures
+            except Exception:
+                pass
 
-        return fixtures
+        from backend.providers.api_sports_provider import api_sports_provider
+        return await api_sports_provider.fetch_fixtures("baseball", date_str=date_str)
 
     def get_game_summary(self, game_id: str) -> Dict[str, Any]:
         if hasattr(mlb_data, "get_game_summary"):

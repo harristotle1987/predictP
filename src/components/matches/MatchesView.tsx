@@ -107,6 +107,21 @@ export const MatchesView: React.FC<MatchesViewProps> = ({ onSelectFixture }) => 
     loadOperationalFixtures(1);
   }, [selectedSport, selectedStatus, selectedDate, pageSize, loadOperationalFixtures]);
 
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
+
+  const handleManualRefresh = async () => {
+    setIsRefreshing(true);
+    setErrorInfo(null);
+    try {
+      await apiService.triggerRefresh({ force: true });
+      await loadOperationalFixtures(page);
+    } catch {
+      await loadOperationalFixtures(page);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
 
   return (
@@ -129,12 +144,13 @@ export const MatchesView: React.FC<MatchesViewProps> = ({ onSelectFixture }) => 
 
         <div className="flex items-center gap-2">
           <button
-            onClick={() => loadOperationalFixtures(page)}
-            disabled={isLoading}
+            onClick={handleManualRefresh}
+            disabled={isLoading || isRefreshing}
             className="flex items-center gap-1.5 rounded border border-zinc-800 bg-[#0c111c] px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-700 hover:text-white transition-colors disabled:opacity-50"
+            title="Refresh operational fixtures and predictions"
           >
-            <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin text-emerald-400' : 'text-zinc-400'}`} />
-            <span>Refresh</span>
+            <RefreshCw className={`h-3.5 w-3.5 ${isLoading || isRefreshing ? 'animate-spin text-emerald-400' : 'text-zinc-400'}`} />
+            <span>{isRefreshing ? 'Refreshing Data...' : 'Refresh'}</span>
           </button>
         </div>
       </div>
@@ -248,8 +264,11 @@ export const MatchesView: React.FC<MatchesViewProps> = ({ onSelectFixture }) => 
         <div className="space-y-3">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {fixtures.map((fixture) => {
-              const hasPrediction = fixture.validationStatus === 'validated' && fixture.validatedMarkets && fixture.validatedMarkets.length > 0;
-              const topPred = fixture.highestPercentagePrediction || (fixture.validatedMarkets && fixture.validatedMarkets[0]);
+              const hasPrediction = fixture.validationStatus === 'validated' && ((fixture.validatedMarkets && fixture.validatedMarkets.length > 0) || Boolean(fixture.highestPercentagePrediction));
+              const highestValidatedMarket = fixture.validatedMarkets && fixture.validatedMarkets.length > 0
+                ? [...fixture.validatedMarkets].sort((a, b) => (b.probabilityPercentage || 0) - (a.probabilityPercentage || 0))[0]
+                : null;
+              const topPred = fixture.highestPercentagePrediction || highestValidatedMarket;
               const rawPct = topPred
                 ? ('percentage' in topPred ? topPred.percentage : ('probabilityPercentage' in topPred ? topPred.probabilityPercentage : null))
                 : null;
@@ -272,28 +291,41 @@ export const MatchesView: React.FC<MatchesViewProps> = ({ onSelectFixture }) => 
                   </div>
 
                   {/* Middle Row: Matchup & Score */}
-                  <div className="my-3 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm font-semibold text-white truncate max-w-[190px]">
-                        {fixture.homeTeam}
-                      </span>
-                      {fixture.currentScore && (
-                        <span className="font-mono text-xs font-bold text-zinc-300">
-                          {fixture.currentScore.home}
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm font-semibold text-white truncate max-w-[190px]">
-                        {fixture.awayTeam}
-                      </span>
-                      {fixture.currentScore && (
-                        <span className="font-mono text-xs font-bold text-zinc-300">
-                          {fixture.currentScore.away}
-                        </span>
-                      )}
-                    </div>
-                  </div>
+                  {(() => {
+                    const kickoffMs = fixture.kickoffUtc ? new Date(fixture.kickoffUtc).getTime() : 0;
+                    const isFuture = kickoffMs > Date.now() + 5 * 60 * 1000;
+                    const rawSt = String(fixture.status || '').toLowerCase().trim();
+                    const isComp = rawSt === 'completed' || rawSt === 'finished' || rawSt === 'ft' || rawSt === 'ended' || rawSt === 'final';
+                    const isLiveMatch = !isComp && !isFuture && (rawSt === 'live' || rawSt === 'in_progress' || rawSt === 'halftime' || rawSt === '1st_half' || rawSt === '2nd_half');
+                    const showScore = isLiveMatch || isComp;
+                    const scoreHome = fixture.finalScore?.home ?? fixture.currentScore?.home;
+                    const scoreAway = fixture.finalScore?.away ?? fixture.currentScore?.away;
+
+                    return (
+                      <div className="my-3 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm font-semibold text-white truncate max-w-[190px]">
+                            {fixture.homeTeam}
+                          </span>
+                          {showScore && typeof scoreHome === 'number' && (
+                            <span className={`font-mono text-xs font-bold ${isLiveMatch ? 'text-amber-300' : 'text-zinc-200'}`}>
+                              {scoreHome}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm font-semibold text-white truncate max-w-[190px]">
+                            {fixture.awayTeam}
+                          </span>
+                          {showScore && typeof scoreAway === 'number' && (
+                            <span className={`font-mono text-xs font-bold ${isLiveMatch ? 'text-amber-300' : 'text-zinc-200'}`}>
+                              {scoreAway}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                   {/* Bottom Row: Prediction Status or Kickoff Info */}
                   <div className="mt-2 flex items-center justify-between pt-2 border-t border-zinc-800/60 text-[11px]">

@@ -315,16 +315,51 @@ async function startServer() {
           };
         }
 
-        if (r.fixture_status) {
-          const rawSt = String(r.fixture_status).toLowerCase().trim();
-          doc.status = rawSt === 'live' ? 'live' : rawSt === 'completed' ? 'completed' : 'upcoming';
-        } else {
-          doc.status = doc.status || 'upcoming';
-        }
+        const kickoffUtc = doc.kickoffUtc || r.kickoffUtc || doc.scheduled_at || r.scheduled_at;
+        const kickoffMs = kickoffUtc ? new Date(kickoffUtc).getTime() : 0;
+        const nowMs = Date.now();
+        const isFutureKickoff = kickoffMs > nowMs + 5 * 60 * 1000;
 
-        if (r.current_score) {
-          doc.currentScore =
-            typeof r.current_score === 'string' ? JSON.parse(r.current_score) : r.current_score;
+        const rawSt = String(r.fixture_status || doc.status || '').toLowerCase().trim();
+        const isCompleted = rawSt === 'completed' || rawSt === 'finished' || rawSt === 'ft' || rawSt === 'ended' || rawSt === 'final';
+        const isLive = !isCompleted && !isFutureKickoff && (rawSt === 'live' || rawSt === 'in_progress' || rawSt === 'halftime' || rawSt === '1st_half' || rawSt === '2nd_half');
+
+        if (isCompleted) {
+          doc.status = 'completed';
+          let parsedScore: any = undefined;
+          if (r.current_score || doc.currentScore || doc.finalScore) {
+            const rawScore = r.current_score || doc.finalScore || doc.currentScore;
+            try {
+              parsedScore = typeof rawScore === 'string' ? JSON.parse(rawScore) : rawScore;
+            } catch {
+              parsedScore = undefined;
+            }
+          }
+          doc.currentScore = parsedScore;
+          doc.finalScore = parsedScore;
+        } else if (isLive) {
+          doc.status = 'live';
+          let parsedScore: any = undefined;
+          if (r.current_score || doc.currentScore) {
+            const rawScore = r.current_score || doc.currentScore;
+            try {
+              parsedScore = typeof rawScore === 'string' ? JSON.parse(rawScore) : rawScore;
+            } catch {
+              parsedScore = undefined;
+            }
+          }
+          doc.currentScore = parsedScore;
+          doc.finalScore = undefined;
+        } else {
+          doc.status = 'upcoming';
+          delete doc.currentScore;
+          delete doc.current_score;
+          delete doc.finalScore;
+          delete doc.final_score;
+          delete doc.home_score;
+          delete doc.away_score;
+          doc.currentScore = undefined;
+          doc.finalScore = undefined;
         }
 
         return doc;
@@ -433,7 +468,31 @@ async function startServer() {
       sql += ` ORDER BY kickoff_utc ASC LIMIT $${idx} OFFSET $${idx + 1};`;
       params.push(limitParam, offsetParam);
 
-      const fixtures = await queryNeon(sql, params);
+      const rawFixtures = await queryNeon(sql, params);
+      const fixtures = rawFixtures.map((f: any) => {
+        const kUtc = f.kickoffUtc || f.scheduled_at;
+        const kMs = kUtc ? new Date(kUtc).getTime() : 0;
+        const isFuture = kMs > Date.now() + 5 * 60 * 1000;
+        const rawStatus = String(f.status || '').toLowerCase().trim();
+        const isComp = rawStatus === 'completed' || rawStatus === 'finished' || rawStatus === 'ft' || rawStatus === 'ended' || rawStatus === 'final';
+        const isLive = !isComp && !isFuture && (rawStatus === 'live' || rawStatus === 'in_progress' || rawStatus === 'halftime' || rawStatus === '1st_half' || rawStatus === '2nd_half');
+        f.status = isComp ? 'completed' : isLive ? 'live' : 'upcoming';
+
+        if (f.status === 'upcoming') {
+          delete f.currentScore;
+          delete f.current_score;
+          delete f.finalScore;
+          delete f.final_score;
+          f.currentScore = undefined;
+          f.finalScore = undefined;
+        } else if (f.currentScore) {
+          try {
+            f.currentScore = typeof f.currentScore === 'string' ? JSON.parse(f.currentScore) : f.currentScore;
+            if (isComp) f.finalScore = f.currentScore;
+          } catch {}
+        }
+        return f;
+      });
       return res.json({
         count: fixtures.length,
         total: fixtures.length,
@@ -455,7 +514,29 @@ async function startServer() {
       if (rows.length === 0) {
         return res.status(404).json({ error: 'Fixture not found' });
       }
-      return res.json({ data: rows[0] });
+      const row: any = rows[0];
+      const kUtc = row.kickoffUtc || row.scheduled_at;
+      const kMs = kUtc ? new Date(kUtc).getTime() : 0;
+      const isFuture = kMs > Date.now() + 5 * 60 * 1000;
+      const rawStatus = String(row.status || '').toLowerCase().trim();
+      const isComp = rawStatus === 'completed' || rawStatus === 'finished' || rawStatus === 'ft' || rawStatus === 'ended' || rawStatus === 'final';
+      const isLive = !isComp && !isFuture && (rawStatus === 'live' || rawStatus === 'in_progress' || rawStatus === 'halftime' || rawStatus === '1st_half' || rawStatus === '2nd_half');
+      row.status = isComp ? 'completed' : isLive ? 'live' : 'upcoming';
+
+      if (row.status === 'upcoming') {
+        delete row.currentScore;
+        delete row.current_score;
+        delete row.finalScore;
+        delete row.final_score;
+        row.currentScore = undefined;
+        row.finalScore = undefined;
+      } else if (row.currentScore) {
+        try {
+          row.currentScore = typeof row.currentScore === 'string' ? JSON.parse(row.currentScore) : row.currentScore;
+          if (isComp) row.finalScore = row.currentScore;
+        } catch {}
+      }
+      return res.json({ data: row });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
     }
@@ -497,11 +578,17 @@ async function startServer() {
   });
 
   // 11. Admin Refresh Pipeline
-  app.post('/api/admin/refresh', (_req: Request, res: Response) => {
+  app.post('/api/admin/refresh', (req: Request, res: Response) => {
+    const targetDate = typeof req.body?.date === 'string' && req.body.date ? req.body.date : '';
     const script = `
 import asyncio, json
 from backend.services.sync_service import sync_service
-rec = asyncio.run(sync_service.execute_refresh(force=True))
+d_arg = ${JSON.stringify(targetDate)} or None
+rec = asyncio.run(sync_service.execute_refresh(force=True, date=d_arg))
+try:
+    asyncio.run(sync_service.execute_sync_feed())
+except Exception:
+    pass
 print(json.dumps(rec.model_dump()))
 `;
     execFile('python3', ['-c', script], { timeout: 60000 }, (error, stdout, stderr) => {
@@ -547,6 +634,48 @@ print(json.dumps(res))
           status: 'success',
           timestamp: new Date().toISOString(),
         });
+      }
+    });
+  });
+
+  // 13. Admin Competitions Registry Discovery
+  app.get('/api/admin/competitions', async (req: Request, res: Response) => {
+    const sport = typeof req.query?.sport === 'string' ? req.query.sport : '';
+    const script = `
+import asyncio, json
+from backend.providers.provider_router import provider_router
+if ${JSON.stringify(sport)}:
+    comps = asyncio.run(provider_router.discover_competitions(${JSON.stringify(sport)}))
+    print(json.dumps({${JSON.stringify(sport)}: comps}))
+else:
+    comps = asyncio.run(provider_router.discover_all_competitions())
+    print(json.dumps(comps))
+`;
+    execFile('python3', ['-c', script], { timeout: 30000 }, (_error, stdout) => {
+      try {
+        const lastLine = stdout.trim().split('\n').filter(Boolean).pop() || '{}';
+        return res.json(JSON.parse(lastLine));
+      } catch {
+        return res.json({});
+      }
+    });
+  });
+
+  // 14. Admin Cross-Sport Competition Telemetry
+  app.get(['/api/admin/telemetry/competitions', '/api/telemetry/competitions'], (_req: Request, res: Response) => {
+    const script = `
+import asyncio, json
+from backend.services.feed_service import feed_service
+rows = asyncio.run(feed_service.get_competition_telemetry())
+table = asyncio.run(feed_service.get_competition_telemetry_table())
+print(json.dumps({"rows": rows, "table": table}))
+`;
+    execFile('python3', ['-c', script], { timeout: 30000 }, (_error, stdout) => {
+      try {
+        const lastLine = stdout.trim().split('\n').filter(Boolean).pop() || '{}';
+        return res.json(JSON.parse(lastLine));
+      } catch {
+        return res.json({ rows: [], table: 'Sport | Competition | Fixtures discovered | Eligible | Rejected | Published\n(No competitions active)' });
       }
     });
   });

@@ -14,8 +14,14 @@ class FootballAdapter(BaseSportsSkillsAdapter):
             raise ValueError("Football event missing source event id")
 
         comp = ev.get("competition") or {}
-        league_name = str(comp.get("name") or "Professional Football").strip()
-        comp_id = str(comp.get("id") or "football_league").strip()
+        league_name = str(comp.get("name") or comp.get("title") or ev.get("league_name") or "").strip()
+        comp_id = str(comp.get("id") or comp.get("slug") or "").strip().lower()
+
+        if not league_name or not comp_id:
+            league_name = "UNKNOWN_COMPETITION"
+            comp_id = "unknown_competition"
+
+        season_val = str(ev.get("season") or (comp.get("season") if isinstance(comp, dict) else None) or "2026/2027")
         start_time = ev.get("start_time") or now_iso
         raw_status = str(ev.get("status") or "not_started").lower()
 
@@ -61,12 +67,26 @@ class FootballAdapter(BaseSportsSkillsAdapter):
         if not home_team or not away_team or home_team == "Home Team" or away_team == "Away Team":
             raise ValueError(f"Football event {ev_id} missing real team names")
 
+        score_obj = None
+        if status in ("live", "completed"):
+            score_obj = {
+                "home": h_score,
+                "away": a_score,
+                "display": f"{h_score} - {a_score}",
+            }
+
         return {
             "id": f"fb_{ev_id}",
+            "fixture_id": f"fb_{ev_id}",
             "source_event_id": ev_id,
             "sport": "football",
             "league": league_name,
             "competition_id": comp_id,
+            "competition_name": league_name,
+            "season": season_val,
+            "fixture_date": start_time,
+            "home": home_team,
+            "away": away_team,
             "competitionTier": "primary",
             "homeTeam": home_team,
             "awayTeam": away_team,
@@ -75,13 +95,10 @@ class FootballAdapter(BaseSportsSkillsAdapter):
             "kickoffUtc": start_time,
             "scheduled_at": start_time,
             "status": status,
-            "currentScore": {
-                "home": h_score,
-                "away": a_score,
-                "display": f"{h_score} - {a_score}",
-            },
+            "currentScore": score_obj,
+            "finalScore": score_obj if status == "completed" else None,
             "source_updated_at": now_iso,
-            "provider": "machina-sports/sports-skills",
+            "provider": self.provider_name,
         }
 
     async def fetch_fixtures(self, date_str: str = None) -> List[Dict[str, Any]]:
@@ -90,10 +107,6 @@ class FootballAdapter(BaseSportsSkillsAdapter):
 
         try:
             import sports_skills.football as football
-        except ImportError as err:
-            raise RuntimeError(f"SportsSkills football module import failed: {err}") from err
-
-        try:
             kwargs = {}
             if date_str:
                 kwargs["date"] = date_str
@@ -101,24 +114,22 @@ class FootballAdapter(BaseSportsSkillsAdapter):
                 asyncio.to_thread(football.get_daily_schedule, **kwargs),
                 timeout=timeout_sec
             )
-        except Exception as e:
-            raise RuntimeError(f"SportsSkills Football get_daily_schedule() error: {str(e)}") from e
+            if isinstance(res, dict):
+                events = res.get("data", {}).get("events", [])
+                if isinstance(events, list) and events:
+                    fixtures: List[Dict[str, Any]] = []
+                    for ev in events:
+                        try:
+                            fixtures.append(self._transform_event(ev, now_iso))
+                        except ValueError:
+                            continue
+                    if fixtures:
+                        return fixtures
+        except Exception:
+            pass
 
-        if not isinstance(res, dict):
-            raise RuntimeError(f"Football provider returned unexpected response type: {type(res)}")
-
-        events = res.get("data", {}).get("events", [])
-        if not isinstance(events, list):
-            events = []
-
-        fixtures: List[Dict[str, Any]] = []
-        for ev in events:
-            try:
-                fixtures.append(self._transform_event(ev, now_iso))
-            except ValueError:
-                continue
-
-        return fixtures
+        from backend.providers.api_sports_provider import api_sports_provider
+        return await api_sports_provider.fetch_fixtures("football", date_str=date_str)
 
     def get_event_summary(self, event_id: str) -> Dict[str, Any]:
         import sports_skills.football as football

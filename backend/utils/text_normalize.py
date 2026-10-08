@@ -119,7 +119,7 @@ def normalize_team_name(name: str) -> str:
     if not name:
         return ""
     n = name.strip().lower()
-    n = re.sub(r"[^a-z0-9 ]", "", n)
+    n = re.sub(r"[^a-z0-9_ ]", "", n)
     for suffix in (" fc", " cf", " sc", " afc", " ac", " club", " team"):
         if n.endswith(suffix):
             n = n[: -len(suffix)]

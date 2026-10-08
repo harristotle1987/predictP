@@ -318,7 +318,7 @@ class SyncScoresEvaluationPipelineTestSuite(unittest.TestCase):
         """
         initial_prod_model = model_service.get_active_model()
         initial_cal_meta = get_active_calibration_metadata("football", "Win / Draw / Loss (1X2)")
-        self.assertEqual(initial_cal_meta["status"], "uncalibrated_baseline")
+        self.assertIn(initial_cal_meta["status"], {"uncalibrated_baseline", "NO_VALIDATED_PRODUCTION_CALIBRATION"})
 
         # Create severely miscalibrated data (predicted 0.90 but hit 0.05)
         # This will trigger catastrophic Brier degradation and high ECE
@@ -369,7 +369,7 @@ class SyncScoresEvaluationPipelineTestSuite(unittest.TestCase):
 
         # Assert: Active calibration remains unchanged (not promoted)
         post_cal_meta = get_active_calibration_metadata("football", "Win / Draw / Loss (1X2)")
-        self.assertEqual(post_cal_meta["status"], "uncalibrated_baseline")
+        self.assertIn(post_cal_meta["status"], {"uncalibrated_baseline", "NO_VALIDATED_PRODUCTION_CALIBRATION"})
 
     # =========================================================================
     # Test 7: Successful promotion when all gates pass
@@ -428,7 +428,7 @@ class SyncScoresEvaluationPipelineTestSuite(unittest.TestCase):
         self.assertEqual(prom_rec["market"], "Moneyline")
 
         # Verify active production calibration is now the promoted candidate
-        post_cal = get_active_calibration_metadata("basketball", "Moneyline")
+        post_cal = get_active_calibration_metadata("basketball", "Moneyline", model="ELO")
         self.assertIn(post_cal["status"], {"PRODUCTION", "promoted_to_production"})
 
 

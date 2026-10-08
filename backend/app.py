@@ -168,6 +168,12 @@ async def get_available_dates():
         "availableDates": dates,
     }
 
+# Diagnostics Summary for UI (Discovered, Eligible, Validated, Published, Sports, Leagues)
+@app.get("/api/predictions/summary")
+@app.get("/api/telemetry/summary")
+async def get_predictions_summary():
+    return await feed_service.get_latest_diagnostics_summary()
+
 async def _enrich_operational_fixtures(fixtures: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     if not fixtures:
         return []
@@ -328,6 +334,18 @@ async def get_competitions(sport: Optional[str] = Query("football")):
         "sport": sport or "football",
         "count": len(comps),
         "competitions": comps,
+    }
+
+# Cross-Sport Competition Telemetry Endpoint (Read-Only)
+@app.get("/api/telemetry/competitions")
+async def get_competition_telemetry():
+    telemetry_data = await feed_service.get_competition_telemetry()
+    table_str = await feed_service.get_competition_telemetry_table()
+    return {
+        "status": "connected",
+        "rows": telemetry_data,
+        "table": table_str,
+        "count": len(telemetry_data),
     }
 
 # Admin refresh (Authenticated only)
